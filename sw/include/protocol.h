@@ -200,8 +200,13 @@ typedef struct {
     volatile uint32_t DIV;      /* bit period in cycles (>= 2) */
     volatile uint32_t PINS;
     volatile uint32_t FLUSH;    /* read blocks until everything is sent */
-    volatile uint32_t CTRL2;    /* fractional bit period, RX resync */
-    uint32_t _pad[24];
+    volatile uint32_t CTRL2;    /* fractional bit period, RX resync, line code, stuffing */
+    volatile uint32_t TXATTR;   /* attributes of the next pushed words */
+    volatile uint32_t CRCCFG;
+    volatile uint32_t CRCINIT;
+    volatile uint32_t RXCRC;
+    volatile uint32_t TURN;     /* auto-reply delay after a received packet, cycles */
+    uint32_t _pad[19];
     volatile uint32_t TXN[32];  /* TXN[n-1] = x pushes an n-bit word */
 } pg_wire_t;
 
@@ -240,6 +245,24 @@ typedef struct {
 /* CTRL2 bits */
 #define WIRE_FRAC(f)     ((uint32_t)(f) & 0xFFu)   /* bit period = DIV + f/256 cycles */
 #define WIRE_RESYNC      (1u << 8)                 /* async RX realigns on every edge */
+#define WIRE_NRZI        (1u << 9)                 /* line code: a 0 bit toggles the line */
+#define WIRE_STUFF(n)    (((uint32_t)(n) & 7u) << 11)  /* insert/remove a bit after n equal bits */
+#define WIRE_STUFF_EQUAL (1u << 14)                /* runs of equal bits (CAN); default: runs of ones (USB) */
+#define WIRE_DIFF        (1u << 15)                /* CLK pin = complement of TX; SE0 = RX and GATE pins low */
+#define WIRE_RX_PACKET   (1u << 16)                /* async RX continues word after word until SE0 */
+
+/* TXATTR bits (apply to the words pushed after the write) */
+#define WIRE_A_NOSTUFF   (1u << 0)
+#define WIRE_A_NOCRC     (1u << 1)
+#define WIRE_A_CRC_INIT  (1u << 2)
+#define WIRE_A_CRC_OUT   (1u << 3)                 /* append the CRC after this word */
+#define WIRE_A_SE0       (1u << 4)                 /* both lines low for this word */
+#define WIRE_A_AFTER_RX  (1u << 5)                 /* start TURN cycles after the next received packet */
+
+/* CRCCFG */
+#define WIRE_CRC(poly, width, xorout, rx_skip) \
+    (((uint32_t)(poly) & 0xFFFFu) | ((((uint32_t)(width) - 1u) & 15u) << 16) | ((xorout) ? 1u << 20 : 0u) | \
+     (((uint32_t)(rx_skip) & 31u) << 24))
 
 /* Bit period for a rate in Hz in 1/256 cycles: DIV = x >> 8, DIV_FRAC = x & 0xFF */
 #define PG_BIT_FIX8(hz)  ((uint32_t)(((uint64_t)PG_F_CPU * 256u + (hz) / 2u) / (hz)))
@@ -257,6 +280,7 @@ typedef struct {
 #define WIRE_STRETCHING   (1u << 19)
 #define WIRE_RX_OVERFLOW  (1u << 24)
 #define WIRE_ARB_LOST     (1u << 25)
+#define WIRE_STUFF_ERROR  (1u << 26)
 
 typedef struct {
     uint32_t ctrl;
@@ -465,5 +489,74 @@ static inline uint8_t i2c_read(const i2c_t *b, int ack)
     WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_IDLE_HIGH | WIRE_OE_OPEN_DRAIN | \
     WIRE_CLK_EXT | WIRE_GATE_I2C | WIRE_EVENTS | WIRE_STRETCH | WIRE_LEN(8),        \
     2u, WIRE_PINS(sda_pin, sda_pin, scl_pin), 0u })
+
+/* ---- USB low speed (1.5 Mbit/s): line layer ------------------------------------
+ * NRZI, stuffing after six ones, CRC16 and the SE0 end of packet are done by
+ * the engine; packets, PIDs and the device state machine are C. D- is the
+ * engine's TX/RX pin, D+ its CLK (complement) and GATE (SE0 detect) pin.
+ * Idle J = D- high (low-speed pull-up on D-). The handshake for a received
+ * packet can be queued in advance and goes out by itself after USB_TURN
+ * cycles, well inside the 7.5 bit times the spec allows.
+ */
+
+#define USB_PID_OUT   0xE1u
+#define USB_PID_IN    0x69u
+#define USB_PID_SETUP 0x2Du
+#define USB_PID_DATA0 0xC3u
+#define USB_PID_DATA1 0x4Bu
+#define USB_PID_ACK   0xD2u
+#define USB_PID_NAK   0x5Au
+#define USB_PID_STALL 0x1Eu
+
+#ifndef USB_TURN
+#define USB_TURN (PG_BIT_FIX8(1500000) * 9u / 512u)   /* 4.5 bit times after SE0 is seen */
+#endif
+
+static inline void usb_ls_init(pg_wire_t *w, int dm_pin, int dp_pin)
+{
+    w->CTRL    = 0;
+    w->DIV     = PG_BIT_FIX8(1500000) >> 8;
+    w->CTRL2   = WIRE_FRAC(PG_BIT_FIX8(1500000)) | WIRE_RESYNC | WIRE_NRZI | WIRE_STUFF(6) |
+                 WIRE_DIFF | WIRE_RX_PACKET;
+    w->PINS    = WIRE_PINS(dm_pin, dm_pin, dp_pin) | WIRE_GATE_PIN(dp_pin);
+    w->CRCCFG  = WIRE_CRC(0x8005u, 16, 1, 16);      /* CRC16; RX skips SYNC and PID */
+    w->CRCINIT = 0xFFFFu;
+    w->TURN    = USB_TURN;
+    w->TXATTR  = 0;
+    w->CTRL    = WIRE_EN | WIRE_TX | WIRE_RX | WIRE_IDLE_HIGH | WIRE_RX_ASYNC | WIRE_OE_FRAME |
+                 WIRE_EVENTS | WIRE_LEN(8);
+}
+
+static inline void usb__eop(pg_wire_t *w)
+{
+    w->TXATTR = WIRE_A_SE0 | WIRE_A_NOSTUFF | WIRE_A_NOCRC;
+    wire_putn(w, 2, 0);                              /* SE0 for two bit times */
+    w->TXATTR = WIRE_A_NOSTUFF | WIRE_A_NOCRC;
+    wire_putn(w, 1, 1);                              /* then J */
+}
+
+/* DATA0/DATA1 packet; the engine appends CRC16. after_rx: wait for a received packet first. */
+static inline void usb_send_data(pg_wire_t *w, uint8_t pid, const uint8_t *data, uint32_t n, int after_rx)
+{
+    w->TXATTR = WIRE_A_NOCRC | (after_rx ? WIRE_A_AFTER_RX : 0u);
+    wire_putn(w, 8, 0x80u);                          /* SYNC */
+    w->TXATTR = WIRE_A_NOCRC | WIRE_A_CRC_INIT | (n ? 0u : WIRE_A_CRC_OUT);
+    wire_putn(w, 8, pid);
+    for (uint32_t i = 0; i < n; i++) {
+        w->TXATTR = (i == 0 ? WIRE_A_CRC_INIT : 0u) | (i == n - 1 ? WIRE_A_CRC_OUT : 0u);
+        wire_putn(w, 8, data[i]);
+    }
+    usb__eop(w);
+}
+
+/* Handshake (ACK/NAK/STALL) sent by the engine after the next received packet. */
+static inline void usb_queue_handshake(pg_wire_t *w, uint8_t pid)
+{
+    w->TXATTR = WIRE_A_NOCRC | WIRE_A_AFTER_RX;
+    wire_putn(w, 8, 0x80u);
+    w->TXATTR = WIRE_A_NOCRC;
+    wire_putn(w, 8, pid);
+    usb__eop(w);
+}
 
 #endif /* POLYGLOT_PROTOCOL_H */

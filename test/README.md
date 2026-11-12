@@ -19,6 +19,7 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `test_i2c.py` | I2C controller against a 24C02-style EEPROM model (NACK, page write, ACK polling, repeated START, clock stretching, setup/hold checks); chip as I2C target driven by a controller model |
 | `lib/host.py` | model of the host SPI loader protocol |
 | `lib/soc.py` | reset, firmware build/load, shared-memory and HOST_IRQ helpers |
-| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py` | independent UART, SPI and I2C peer models; open-drain bus model for the uio pins |
+| `test_usb.py` | USB low-speed line layer: DATA0 from the chip (NRZI, stuffing, CRC16, EOP, 33.33-cycle bits) and a host DATA1 into the chip with the hardware-timed ACK inside the 2..7.5 bit-time window |
+| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py` | independent UART, SPI, I2C and USB LS peer models; open-drain and USB bus models for the uio pins |
 | `lib/pins.py` | shared driver for `ui_in` (several models drive different bits) |
 | `tb.v` | testbench wrapper around the top level |
