@@ -9,6 +9,11 @@
  *                                cycles; 0 = wait forever (reset value)
  *   0x8000_00F4  BLK_FLAGS   RW  [0] a blocking access timed out (sticky,
  *                                write 1 to clear)
+ *   0x8000_00F8  EVWAIT      RW  write: event mask; read: blocks until an
+ *                                event in the mask is pending, returns the
+ *                                pending events. Events: [n] Wire Engine n
+ *                                has received data, [8] an edge is captured.
+ *                                Lets C sleep on several sources at once.
  *   0x8000_0100 + 0x100*n  Wire Engine n (pg_wire), n = 0..NUM_WIRES-1
  *
  * A blocking access (full TX FIFO, empty RX FIFO, ...) holds HREADY low.
@@ -68,6 +73,7 @@ module pg_io #(
   wire        sys_ready;
   wire [13:0] gpio_out;
   wire [7:0]  gpio_oe;
+  wire        cap_ready;
 
   pg_sysio u_sys (
       .clk     (clk),
@@ -81,13 +87,14 @@ module pg_io #(
       .pin_in  (pin_in),
       .gpio_out(gpio_out),
       .gpio_oe (gpio_oe),
-      .host_irq(host_irq)
+      .host_irq(host_irq),
+      .cap_ready(cap_ready)
   );
 
   wire [32*NUM_WIRES-1:0] w_rdata;
   wire [NUM_WIRES-1:0]    w_ready, w_sel;
   wire [5*NUM_WIRES-1:0]  w_tx_pin, w_clk_pin;
-  wire [NUM_WIRES-1:0]    w_tx_on, w_tx_val, w_tx_oe, w_clk_on, w_clk_val, w_clk_oe;
+  wire [NUM_WIRES-1:0]    w_tx_on, w_tx_val, w_tx_oe, w_clk_on, w_clk_val, w_clk_oe, w_rx_avail;
 
   genvar g;
   generate
@@ -110,7 +117,8 @@ module pg_io #(
           .clk_pin(w_clk_pin[5*g +: 5]),
           .clk_on (w_clk_on[g]),
           .clk_val(w_clk_val[g]),
-          .clk_oe (w_clk_oe[g])
+          .clk_oe (w_clk_oe[g]),
+          .rx_avail(w_rx_avail[g])
       );
     end
   endgenerate
@@ -120,7 +128,11 @@ module pg_io #(
   // ---------------------------------------------------------------------
   reg  [31:0] blk_limit, blk_cnt;
   reg         blk_flag;
-  wire        slave_ready = sys_ready && (&w_ready);
+  reg  [8:0]  ev_mask;
+  wire [8:0]  ev_pend   = {cap_ready, {(8-NUM_WIRES){1'b0}}, w_rx_avail} & ev_mask;
+  wire        ev_rd     = sel_blk && !write && addr[3:0] == 4'h8;
+  wire        ev_ready  = !ev_rd || (ev_pend != 9'd0);
+  wire        slave_ready = sys_ready && (&w_ready) && ev_ready;
   wire        timed_out   = valid && !slave_ready && (blk_limit != 32'd0) && (blk_cnt >= blk_limit);
 
   assign ready = slave_ready || timed_out;
@@ -130,12 +142,14 @@ module pg_io #(
       blk_cnt   <= 32'd0;
       blk_limit <= 32'd0;
       blk_flag  <= 1'b0;
+      ev_mask   <= 9'd0;
     end else begin
       blk_cnt <= (valid && !ready) ? blk_cnt + 32'd1 : 32'd0;
       if (timed_out) blk_flag <= 1'b1;
       if (sel_blk && write) begin
         if (addr[3:0] == 4'h0) blk_limit <= wdata;
         if (addr[3:0] == 4'h4 && wdata[0]) blk_flag <= 1'b0;
+        if (addr[3:0] == 4'h8) ev_mask <= wdata[8:0];
       end
     end
   end
@@ -150,6 +164,7 @@ module pg_io #(
       if (addr[7:4] != 4'hF)       rdata = sys_rdata;
       else if (addr[3:0] == 4'h0)  rdata = blk_limit;
       else if (addr[3:0] == 4'h4)  rdata = {31'd0, blk_flag};
+      else if (addr[3:0] == 4'h8)  rdata = {23'd0, ev_pend};
     end
     for (i = 0; i < NUM_WIRES; i = i + 1)
       if (page == i[3:0] + 4'd1) rdata = w_rdata[32*i +: 32];

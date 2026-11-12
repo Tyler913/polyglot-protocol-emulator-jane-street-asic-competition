@@ -40,6 +40,7 @@ Polyglot is a protocol emulator that is programmed in plain C. Protocol knowledg
 - Memory map: SRAM at 0x0000_0000 (4 KB; the last 256 bytes are shared with the host), system registers at 0x8000_0000, Wire Engine *n* at 0x8000_0100 + 0x100·*n*.
 - Toolchain: `riscv-none-elf-gcc -march=rv32ec -mabi=ilp32e`, `sw/rt/crt0.S`, `sw/rt/link.ld`. No custom assembler or compiler.
 - **Blocking I/O**: reading an empty RX FIFO, writing a full TX FIFO, waiting for an edge capture or for the timed-GPIO queue to drain all simply stall the CPU's bus access (AHB wait states) until the hardware is ready. C code reads like ordinary sequential code (`uart_getc()` waits for a byte) and the CPU uses no power-hungry polling loop. A global timeout (`BLK_TIMEOUT`) bounds every wait.
+- **Several sources at once**: `wait_events(mask)` sleeps until any selected engine has received data (or an edge was captured) and returns which ones; one C loop serves several protocols (the USB keyboard example also listens on a UART).
 - **Time**: `now()` is a 32-bit cycle counter. Everything that must happen at an exact time is done by hardware that takes a time stamp from C.
 
 ## 3. Timed GPIO and capture

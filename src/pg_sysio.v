@@ -62,7 +62,8 @@ module pg_sysio #(
     input  wire [31:0] pin_in,     // synchronized inputs
     output reg  [13:0] gpio_out,
     output reg  [7:0]  gpio_oe,
-    output reg         host_irq
+    output reg         host_irq,
+    output wire        cap_ready      // an edge has been captured (for EVWAIT)
 );
 
   localparam [31:0] ID = 32'h5047_0003;
@@ -216,6 +217,8 @@ module pg_sysio #(
       default: rdata = 32'd0;
     endcase
   end
+
+  assign cap_ready = cap_valid;
 
   wire _unused = &{1'b0, wdata[30], wdata[15:14], h_mask[13:8], h_value[13:8]};
 

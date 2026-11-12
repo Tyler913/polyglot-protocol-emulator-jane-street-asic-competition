@@ -60,6 +60,7 @@
 #define PG_PARK        PG_REG(0x48)
 #define PG_BLK_TIMEOUT PG_REG(0xF0)
 #define PG_BLK_FLAGS   PG_REG(0xF4)
+#define PG_EVWAIT      PG_REG(0xF8)
 
 /* Last 256 bytes of SRAM: shared with the host (parameters in, results out).
  * The stack starts below it. */
@@ -159,6 +160,19 @@ static inline int block_timed_out(void)
     int f = PG_BLK_FLAGS & 1u;
     PG_BLK_FLAGS = 1u;
     return f;
+}
+
+/* ---- Waiting for several things at once ---------------------------------------
+ * wait_events(mask) sleeps (the CPU's bus access stalls) until one of the
+ * events in mask is pending and returns the pending ones: EV_WIRE(n) = engine
+ * n has received data, EV_CAPTURE = an edge was captured. */
+#define EV_WIRE(n)  (1u << (n))
+#define EV_CAPTURE  (1u << 8)
+
+static inline uint32_t wait_events(uint32_t mask)
+{
+    PG_EVWAIT = mask;
+    return PG_EVWAIT;
 }
 
 /* Wait for an edge on pin, at most timeout ticks (0 = forever).

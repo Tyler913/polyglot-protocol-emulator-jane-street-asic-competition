@@ -20,7 +20,7 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `lib/host.py` | model of the host SPI loader protocol |
 | `lib/soc.py` | reset, firmware build/load, shared-memory and HOST_IRQ helpers |
 | `test_usb.py` | USB low-speed line layer: DATA0 from the chip (NRZI, stuffing, CRC16, EOP, 33.33-cycle bits) and a host DATA1 into the chip with the hardware-timed ACK inside the 2..7.5 bit-time window |
-| `test_usb_hid.py` | USB low-speed HID keyboard written in C is enumerated by a host model (descriptors, SET_ADDRESS, SET_CONFIGURATION, SET_IDLE) and types "Hi"; every answer within the 7.5 bit-time turnaround |
+| `test_usb_hid.py` | USB low-speed HID keyboard written in C is enumerated by a host model (descriptors, SET_ADDRESS, SET_CONFIGURATION, SET_IDLE) and types "Hi"; every answer within the 7.5 bit-time turnaround. Second test: text sent to the chip's UART is typed over USB at the same time (two engines, one C loop) |
 | `test_eth.py` | 10BASE-T transmit at a 40 MHz clock: Manchester, differential TD+/TD-, preamble/SFD, CRC-32 FCS checked with zlib |
 | `test_ws2812.py` | WS2812 LEDs from a plain NRZ engine stream (3 line bits per LED bit), checked against datasheet pulse timing |
 | `test_onewire.py` | 1-Wire master from timed GPIO only (reset/presence, write and read slots), READ ROM from a DS18B20-style model with timing checks |

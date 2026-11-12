@@ -2,25 +2,33 @@
  * Copyright (c) 2026 Tyler Hong
  * SPDX-License-Identifier: Apache-2.0
  *
- * usb_hid: a USB low-speed HID boot keyboard in plain C on Wire Engine 1.
- * The engine does NRZI, bit stuffing, CRC16 and the end of packet; this
- * file is the whole device: control endpoint 0 (enumeration) and interrupt
- * endpoint 1, which types "Hi" once the host has configured the device.
+ * usb_hid: a USB low-speed HID boot keyboard in plain C on Wire Engine 1,
+ * with a UART receiver on Wire Engine 0 at the same time: it types "Hi",
+ * then every character that arrives on the serial line (a serial-to-USB
+ * keyboard). The engine does NRZI, bit stuffing, CRC16 and the end of
+ * packet; this file is the whole device: control endpoint 0 (enumeration)
+ * and interrupt endpoint 1. One loop sleeps in wait_events() until either
+ * engine has received something.
  *
  * Timing: USB gives a device 7.5 bit times (250 cycles at 50 MHz) to answer
  * a packet. C does not have to be that fast: every answer (ACK after a DATA
  * packet, DATA after an IN token) is queued in advance and the engine sends
  * it by itself a fixed turnaround after the matching packet (RXMATCH).
  *
- * Pins: D- uio[4] (P4), D+ uio[5] (P5), 1.5 kOhm pull-up on D- (low speed).
+ * Pins: D- uio[4] (P4), D+ uio[5] (P5), 1.5 kOhm pull-up on D- (low speed);
+ * UART RX on ui[0] (P16), 8N1, 115200 baud (UART_BAUD).
  * VID 0x1209 / PID 0x0001 are the pid.codes test IDs.
  * Results (PG_SHARED): [1] device address, [2] configuration, [3] reports
- * sent, [4] bus resets seen, [5] packets with a bad CRC.
+ * sent, [4] bus resets seen, [5] packets with a bad CRC, [6] UART characters.
  */
 
 #include "protocol.h"
 
-#define USB W1
+#define USB  W1
+#define UART W0
+#ifndef UART_BAUD
+#define UART_BAUD 115200u            /* compile-time: the divider is computed by the compiler */
+#endif
 
 static const uint8_t dev_desc[18] = {
     18, 1, 0x10, 0x01, 0, 0, 0, 8,          /* USB 1.1, class per interface, EP0 size 8 */
@@ -42,16 +50,30 @@ static const uint8_t conf_desc[34] = {
     7, 5, 0x81, 3, 8, 0, 10                 /* EP1 IN, interrupt, 8 bytes, 10 ms */
 };
 
-/* "Hi": shift+h, release, i, release */
-static const uint8_t reports[4][8] = {
-    {0x02, 0, 0x0B, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 0, 0, 0, 0},
-    {0, 0, 0x0C, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 0, 0, 0, 0},
-};
+/* Key queue: (modifier, keycode) pairs; each is typed as a press then a release */
+static uint8_t keyq[32][2];
+static uint32_t kq_head, kq_tail;
+static int released = 1;                      /* the last report the host took was a release */
+static int queued_press;                      /* the report waiting for the host is a key press */
+
+static void type_char(char c)
+{
+    uint8_t mod = 0, key = 0;
+    if (c >= 'a' && c <= 'z')      key = (uint8_t)(0x04 + c - 'a');
+    else if (c >= 'A' && c <= 'Z') { key = (uint8_t)(0x04 + c - 'A'); mod = 0x02; }
+    else if (c >= '1' && c <= '9') key = (uint8_t)(0x1E + c - '1');
+    else if (c == '0')             key = 0x27;
+    else if (c == ' ')             key = 0x2C;
+    else if (c == '\n' || c == '\r') key = 0x28;
+    if (!key || kq_head - kq_tail >= 32u) return;
+    keyq[kq_head % 32u][0] = mod;
+    keyq[kq_head % 32u][1] = key;
+    kq_head++;
+}
 
 static uint8_t addr, new_addr, config, ep1_toggle;
 static uint32_t nreport;
+static uint8_t report[8];
 
 /* control transfer state */
 static const uint8_t *in_ptr;   /* data stage still to send (IN) */
@@ -132,10 +154,24 @@ static int token_ok(const uint8_t *p, uint8_t *ep)
     return (bits & 0x7F) == addr;
 }
 
+/* Next report: a press for the next queued key, or a release after a press.
+ * The key leaves the queue only when the host takes the report (it may be
+ * discarded if a control transfer comes first). */
 static void next_report(void)
 {
-    const uint8_t *r = reports[nreport < 4u ? nreport : 3u];
-    queue_in(r, 8, ep1_toggle);
+    for (int i = 0; i < 8; i++) report[i] = 0;
+    queued_press = released && kq_tail != kq_head;
+    if (queued_press) {
+        report[0] = keyq[kq_tail % 32u][0];
+        report[2] = keyq[kq_tail % 32u][1];
+    }
+    queue_in(report, 8, ep1_toggle);
+}
+
+static void report_taken(void)
+{
+    if (queued_press) { kq_tail++; released = 0; }
+    else              released = 1;
 }
 
 static void handle(const uint8_t *p, uint32_t n)
@@ -185,7 +221,8 @@ static void handle(const uint8_t *p, uint32_t n)
             if (config) next_report();
         } else if (config) {                        /* interrupt endpoint report taken */
             ep1_toggle ^= 1;
-            if (nreport < 4u) PG_SHARED[3] = ++nreport;
+            report_taken();
+            PG_SHARED[3] = ++nreport;
             next_report();
         }
         break;
@@ -199,11 +236,20 @@ int main(void)
     uint8_t pkt[16];
     uint32_t n = 0;
 
-    for (int i = 1; i < 6; i++) PG_SHARED[i] = 0;
+    for (int i = 1; i < 7; i++) PG_SHARED[i] = 0;
+    type_char('H');
+    type_char('i');
+    wire_config(UART, WIRE_UART_8N1(PIN_UO(1), PIN_UI(0), UART_BAUD));
     usb_ls_init(USB, PIN_UIO(4), PIN_UIO(5));
     host_irq(1);
 
     for (;;) {
+        uint32_t ev = wait_events(EV_WIRE(0) | EV_WIRE(1));   /* sleep until either engine has data */
+        if (ev & EV_WIRE(0)) {
+            int c = uart_getc(UART);
+            if (c >= 0) { type_char((char)c); PG_SHARED[6]++; }
+        }
+        if (!(ev & EV_WIRE(1))) continue;
         uint32_t w = wire_get(USB);
         if (w != WIRE_EV_END) {
             if (n < sizeof pkt) pkt[n] = (uint8_t)w;
@@ -217,7 +263,7 @@ int main(void)
                 wire_flush(USB);
                 USB->CTRL &= ~WIRE_EN;
                 usb_ls_init(USB, PIN_UIO(4), PIN_UIO(5));
-                addr = new_addr = config = 0; ep1_toggle = 0; nreport = 0;
+                addr = new_addr = config = 0; ep1_toggle = 0; nreport = 0; released = 1;
                 ctl = CTL_IDLE; in_pending = 0;
                 PG_SHARED[4]++;
             }

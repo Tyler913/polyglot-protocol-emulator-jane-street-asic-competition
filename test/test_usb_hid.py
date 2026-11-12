@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Tyler Hong
 # SPDX-License-Identifier: Apache-2.0
 """A USB low-speed HID keyboard in plain C (sw/examples/usb_hid) is enumerated
-by an independent USB host model (test/lib/usb.py) and types "Hi".
+by an independent USB host model (test/lib/usb.py) and types "Hi"; a second
+test types text that arrives on the chip's UART at the same time
+(two engines, two protocols, one C loop).
 
 Checks: bus reset, GET_DESCRIPTOR (device, configuration, HID report) at
 address 0 and 5, SET_ADDRESS, SET_CONFIGURATION, SET_IDLE, interrupt IN
@@ -11,8 +13,10 @@ stuffing and CRC checks of the bus monitor.
 """
 
 import cocotb
+from cocotb.triggers import ClockCycles
 
 from lib.soc import F_CPU, load, read_shared, start, wait_irq
+from lib.uart import UartDriver, bit_cycles
 from lib.usb import UsbBus, UsbHost, UsbMonitor
 
 BIT = F_CPU / 1_500_000
@@ -77,3 +81,52 @@ async def enumerate_and_type(dut, h, host, bus, mon):
 
     addr, config, nrep, resets, bad = await read_shared(host, 1, 5)
     assert (addr, config, resets, bad) == (5, 1, 1, 0), f"addr {addr} config {config} resets {resets} bad CRC {bad}"
+
+
+KEYS = {0x28: "\n", 0x2C: " ", 0x27: "0"}
+KEYS.update({0x04 + i: chr(ord("a") + i) for i in range(26)})
+KEYS.update({0x1E + i: chr(ord("1") + i) for i in range(9)})
+
+
+def typed(reports):
+    out = ""
+    for r in reports:
+        if r[2]:
+            c = KEYS.get(r[2], "?")
+            out += c.upper() if r[0] & 0x22 else c
+    return out
+
+
+@cocotb.test()
+async def test_usb_keyboard_types_uart_text(dut):
+    """UART text in, USB key presses out, concurrently."""
+    host = await start(dut)
+    bus = UsbBus(dut, dm=4, dp=5, bit=BIT)
+    mon = UsbMonitor(bus)
+    uart = UartDriver(dut, ui_bit=0, bit=bit_cycles(115_200))
+    bus.start()
+    await load(host, "usb_hid")
+    await host.ctrl(0x01)
+    await wait_irq(dut, 1, timeout=20_000)
+    h = UsbHost(bus, mon)
+    await h.reset(500)
+    await h.control_read(0, req(0x80, 6, 0x0100, 0, 64))
+    await h.control_write(0, req(0x00, 5, 7, 0, 0))
+    await h.control_write(7, req(0x00, 9, 1, 0, 0))
+
+    text = "ok 42\n"
+    sender = cocotb.start_soon(uart.send(text.encode(), gap_bits=1))
+    reports, toggle = [], 0
+    for _ in range(400):  # poll like a host would, while the UART bytes arrive
+        await h.gap(60)
+        reports.append(await h.in_(7, 1, toggle))
+        toggle ^= 1
+        if typed(reports) == "Hi" + text:
+            break
+    await sender
+    bus.stop()
+    assert not bus.errors, bus.errors[:5]
+    assert not mon.errors, mon.errors[:5]
+    assert typed(reports) == "Hi" + text, f"typed {typed(reports)!r}"
+    chars = (await read_shared(host, 6, 1))[0]
+    assert chars == len(text), f"firmware counted {chars} UART characters"
