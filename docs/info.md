@@ -46,6 +46,8 @@ UART echo: load `sw/build/uart_echo.bin` and connect a 115200 baud 8N1 serial ad
 
 SPI: `sw/build/spi_ram.bin` drives SCK on uo[2], MOSI on uo[3], CS_N on uo[4] and reads MISO on ui[1] (for a 23x-style SPI RAM with 8-bit addresses).
 
+USB low speed: `sw/build/usb_hid.bin` is a USB HID boot keyboard (D- uio[4], D+ uio[5], 1.5 kOhm pull-up on D-, series resistors / level shifting to 3.3 V USB levels as usual). After enumeration it types "Hi".
+
 I2C (pull-ups needed): `sw/build/i2c_eeprom.bin` talks to a 24C02 EEPROM on SDA uio[0] / SCL uio[1]; `sw/build/i2c_target.bin` makes the chip an I2C target at address 0x42 (16 registers) on SDA uio[2] / SCL uio[3].
 
 ## External hardware

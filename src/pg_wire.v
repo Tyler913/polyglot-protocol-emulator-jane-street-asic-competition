@@ -51,6 +51,8 @@
  *                   [28:24] GATE pin
  *   0x18 FLUSH  R   blocks until the TX FIFO is empty and the last word has
  *                   been fully sent (internal clock); reads 0
+ *               W   [0] = 1: discard the TX FIFO and the word being sent (RX
+ *                   and configuration are not touched)
  *   0x1C CTRL2  RW  [7:0] DIV_FRAC: the bit period is DIV + DIV_FRAC/256 cycles
  *                   on average, [8] RESYNC: async RX restarts its bit timer
  *                   on every edge of the RX line; bit-level options (internal
@@ -236,9 +238,10 @@ module pg_wire #(
   wire tx_write = acc && write && (tx_win || ra == R_TX);
   wire txf_push = tx_write && en;
   wire rxf_pop  = acc && reg_sel && !write && (ra == R_RX) && en;
+  wire tx_discard = acc && reg_sel && write && (ra == R_FLUSH) && wdata[0];
 
   pg_fifo #(.W(FW), .AW(FIFO_AW)) u_txf (
-      .clk(clk), .rst(srst || f_stop), .push(txf_push),
+      .clk(clk), .rst(srst || f_stop || tx_discard), .push(txf_push),
       .din({full ? txattr : 6'd0, tx_win ? addr[6:2] : len_m1, wdata}), .pop(txf_pop),
       .dout(txf_dout), .level(txf_level), .full(txf_full), .empty(txf_empty)
   );
@@ -487,9 +490,10 @@ module pg_wire #(
       // Frame end: drop the current word (the TX FIFO is flushed too). Frame
       // start: drop a word that already started shifting (the controller
       // abandoned it); a word that has not started is kept for the new frame.
-      if (f_stop) begin
+      if (f_stop || tx_discard) begin
         tx_busy <= 1'b0;
         tail    <= 1'b0;
+        itail   <= 2'd0;
         tx_cnt  <= 5'd0;
         sampled <= 1'b0;
       end else if (f_start) begin
@@ -521,8 +525,8 @@ module pg_wire #(
           turn_cnt <= turn_cnt + 16'd1;
         end
       end
-      if (rx_start || (tx_load && h_after) || push_after) turn_go <= 1'b0;
-      if (push_after) turn_run <= 1'b0;
+      if (rx_start || (tx_load && h_after) || push_after || tx_discard) turn_go <= 1'b0;
+      if (push_after || tx_discard) turn_run <= 1'b0;
     end
   end
 

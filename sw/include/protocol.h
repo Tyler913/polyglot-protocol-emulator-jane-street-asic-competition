@@ -314,6 +314,7 @@ static inline void     wire_putn(pg_wire_t *w, int n, uint32_t x) { w->TXN[n - 1
 static inline uint32_t wire_get(pg_wire_t *w)             { return w->RX; }
 static inline int      wire_rx_count(pg_wire_t *w)        { return (int)WIRE_RX_LEVEL(w->STATUS); }
 static inline void     wire_flush(pg_wire_t *w)           { (void)w->FLUSH; }
+static inline void     wire_tx_discard(pg_wire_t *w)      { w->FLUSH = 1u; }   /* drop queued TX words */
 
 /* ---- UART: just parameters ------------------------------------------------------
  * A UART frame is a 10-bit word sent LSB first: start bit 0, 8 data bits,
@@ -542,28 +543,49 @@ static inline void usb__eop(pg_wire_t *w)
     wire_putn(w, 2, 0);                              /* SE0 for two bit times, then J (TAIL_BITS) */
 }
 
-/* DATA0/DATA1 packet; the engine appends CRC16. after_rx: wait for a received packet first. */
+/* DATA0/DATA1 packet (0..8 bytes); the engine appends CRC16. SYNC+PID go out
+ * as one 16-bit word and the payload as words of up to 4 bytes, so a full
+ * packet takes at most 4 FIFO words. after_rx: wait for a matching received
+ * packet first (see RXMATCH). */
 static inline void usb_send_data(pg_wire_t *w, uint8_t pid, const uint8_t *data, uint32_t n, int after_rx)
 {
-    w->TXATTR = WIRE_A_NOCRC | (after_rx ? WIRE_A_AFTER_RX : 0u);
-    wire_putn(w, 8, 0x80u);                          /* SYNC */
-    w->TXATTR = WIRE_A_NOCRC | WIRE_A_CRC_INIT | (n ? 0u : WIRE_A_CRC_OUT);
-    wire_putn(w, 8, pid);
-    for (uint32_t i = 0; i < n; i++) {
-        w->TXATTR = (i == 0 ? WIRE_A_CRC_INIT : 0u) | (i == n - 1 ? WIRE_A_CRC_OUT : 0u);
-        wire_putn(w, 8, data[i]);
+    w->TXATTR = WIRE_A_NOCRC | WIRE_A_CRC_INIT | (n ? 0u : WIRE_A_CRC_OUT) | (after_rx ? WIRE_A_AFTER_RX : 0u);
+    wire_putn(w, 16, 0x80u | ((uint32_t)pid << 8));  /* SYNC, PID */
+    for (uint32_t i = 0; i < n; ) {
+        uint32_t k = n - i < 4u ? n - i : 4u, x = 0;
+        for (uint32_t j = 0; j < k; j++) x |= (uint32_t)data[i + j] << (8 * j);
+        i += k;
+        w->TXATTR = (i == n) ? WIRE_A_CRC_OUT : 0u;
+        wire_putn(w, (int)(8 * k), x);
     }
     usb__eop(w);
 }
 
-/* Handshake (ACK/NAK/STALL) sent by the engine after the next received packet. */
+/* Handshake (ACK/NAK/STALL) sent by the engine after the next matching received packet. */
 static inline void usb_queue_handshake(pg_wire_t *w, uint8_t pid)
 {
     w->TXATTR = WIRE_A_NOCRC | WIRE_A_AFTER_RX;
-    wire_putn(w, 8, 0x80u);
-    w->TXATTR = WIRE_A_NOCRC;
-    wire_putn(w, 8, pid);
+    wire_putn(w, 16, 0x80u | ((uint32_t)pid << 8));
     usb__eop(w);
+}
+
+/* RXMATCH presets: reply only to a DATA packet, or only to an IN token */
+#define USB_MATCH_DATA  WIRE_MATCH(1, 0x03, 0x03)   /* DATA0/1/2/MDATA: PID bits 1:0 = 11 */
+#define USB_MATCH_IN    WIRE_MATCH(1, USB_PID_IN, 0xFF)
+
+/* CRC5 of a token's 11 address/endpoint bits, as the 5-bit field sent after them */
+static inline uint32_t usb_crc5(uint32_t bits11)
+{
+    uint32_t c = 0x1F;
+    for (int i = 0; i < 11; i++) {
+        uint32_t fb = ((bits11 >> i) & 1u) ^ ((c >> 4) & 1u);
+        c = (c << 1) & 0x1Fu;
+        if (fb) c ^= 0x05u;
+    }
+    c ^= 0x1Fu;
+    uint32_t r = 0;                                  /* sent MSB first: reverse into LSB-first order */
+    for (int i = 0; i < 5; i++) r |= ((c >> (4 - i)) & 1u) << i;
+    return r;
 }
 
 /* ---- 10BASE-T Ethernet (TX): line layer -------------------------------------

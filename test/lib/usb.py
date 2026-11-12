@@ -188,3 +188,99 @@ class UsbMonitor:
         p.update(bytes=data, eop_start=se0_at, eop_end=t_end)
         self.packets.append(p)
         self.errors += [f"packet {len(self.packets)}: {e}" for e in p["errors"]]
+
+
+def token_packet(pid, addr, ep):
+    """Token: PID, 7-bit address, 4-bit endpoint, CRC5 (sent MSB first)."""
+    bits = [((addr | (ep << 7)) >> i) & 1 for i in range(11)]
+    c = crc_bits(bits, 5, 0x05, 0x1F) ^ 0x1F
+    bits += [(c >> (4 - i)) & 1 for i in range(5)]
+    return bytes([pid, sum(bits[i] << i for i in range(8)), sum(bits[8 + i] << i for i in range(8))])
+
+
+class UsbHost:
+    """A minimal low-speed host: transactions and control transfers, with the
+    device's response time checked against the 7.5 bit-time limit."""
+
+    PID_OUT, PID_IN, PID_SETUP = 0xE1, 0x69, 0x2D
+    PID_DATA0, PID_DATA1, PID_ACK = 0xC3, 0x4B, 0xD2
+
+    def __init__(self, bus, mon):
+        self.bus, self.mon, self.bit = bus, mon, bus.bit
+        self.clk = bus.dut.clk
+        self.turnarounds = []  # device response gaps in bit times
+
+    async def gap(self, bits):
+        await ClockCycles(self.clk, max(1, round(bits * self.bit)))
+
+    async def reset(self, cycles):
+        self.bus.host = SE0
+        await ClockCycles(self.clk, cycles)
+        self.bus.host = None
+        await self.gap(60)
+
+    async def _send(self, packet):
+        await self.bus.send(packet)
+        return len(self.mon.packets)  # the host packet is recorded by now
+
+    async def _response(self, n0, timeout_bits=16):
+        """The device packet after packet n0, or None if it does not start in time."""
+        end = self.mon.packets[n0 - 1]["eop_end"]
+        for _ in range(round(timeout_bits * self.bit)):
+            if self.mon.cur is not None or len(self.mon.packets) > n0:
+                break
+            await ClockCycles(self.clk, 1)
+        else:
+            return None
+        while len(self.mon.packets) <= n0:
+            await ClockCycles(self.clk, 1)
+        p = self.mon.packets[n0]
+        self.turnarounds.append((p["start"] - end) / self.bit)
+        return p
+
+    async def setup(self, addr, data8):
+        await self._send(token_packet(self.PID_SETUP, addr, 0))
+        await self.gap(4)
+        n = await self._send(data_packet(self.PID_DATA0, data8))
+        r = await self._response(n)
+        assert r is not None and r["bytes"] == bytes([self.PID_ACK]), f"SETUP not acknowledged: {r and r['bytes'].hex()}"
+
+    async def in_(self, addr, ep, toggle):
+        n = await self._send(token_packet(self.PID_IN, addr, ep))
+        r = await self._response(n)
+        assert r is not None, f"no answer to IN addr {addr} ep {ep}"
+        pid = r["bytes"][0]
+        assert pid == (self.PID_DATA1 if toggle else self.PID_DATA0), f"IN answered with PID {pid:#04x}, toggle {toggle}"
+        await self.gap(4)
+        await self._send(bytes([self.PID_ACK]))
+        return r["bytes"][1:-2]
+
+    async def out_zlp(self, addr, ep):
+        await self._send(token_packet(self.PID_OUT, addr, ep))
+        await self.gap(4)
+        n = await self._send(data_packet(self.PID_DATA1, b""))
+        r = await self._response(n)
+        assert r is not None and r["bytes"] == bytes([self.PID_ACK]), "status OUT not acknowledged"
+
+    async def control_read(self, addr, setup8):
+        length = setup8[6] | (setup8[7] << 8)
+        await self.setup(addr, setup8)
+        data, toggle = b"", 1
+        while len(data) < length:
+            await self.gap(30)
+            chunk = await self.in_(addr, 0, toggle)
+            data += chunk
+            toggle ^= 1
+            if len(chunk) < 8:
+                break
+        await self.gap(30)
+        await self.out_zlp(addr, 0)
+        await self.gap(30)
+        return data
+
+    async def control_write(self, addr, setup8):
+        await self.setup(addr, setup8)
+        await self.gap(30)
+        zlp = await self.in_(addr, 0, 1)
+        assert zlp == b"", f"status stage returned data {zlp.hex()}"
+        await self.gap(30)
