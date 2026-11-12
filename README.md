@@ -13,7 +13,8 @@ A small RISC-V core runs ordinary C compiled with stock GCC or Clang. Protocol-a
 | `src/` | RTL. `pg_*.v` is ours; `hazard3_*` is the [Hazard3](https://github.com/Wren6991/Hazard3) RISC-V core by Luke Wren (Apache-2.0), vendored unchanged at commit `8af992930f71` |
 | `sw/` | `protocol.h`, startup code, linker script, example programs (`examples/`) and test programs (`tests/`) |
 | `test/` | cocotb tests (they build the firmware and run it on the RTL) |
-| `docs/info.md` | Tiny Tapeout datasheet |
+| `tools/polyglot_host.py` | host driver (MicroPython on the demo board's RP2350): load, run, read/write memory |
+| `docs/` | `architecture.md`, `programming.md`, `verification.md`, `ai_use.md`, and the Tiny Tapeout datasheet `info.md` |
 | `librelane_plugin_polyglot.py`, `flow/` | LibreLane step that powers the SRAM macro (Metal4 stripes on its supply columns) |
 
 ## Build and test
