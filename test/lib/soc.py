@@ -11,7 +11,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, ReadOnly, RisingEdge
 
 from .host import HostSpi
-from .pins import ui_pins
+from .pins import bit, ui_pins
 
 SW_DIR = Path(__file__).resolve().parents[2] / "sw"
 CLK_NS = 20  # 50 MHz
@@ -57,7 +57,7 @@ async def read_shared(host, index, count):
 
 
 def host_irq(dut):
-    return (int(dut.uo_out.value) >> HOST_IRQ) & 1
+    return bit(dut.uo_out, HOST_IRQ)
 
 
 async def wait_irq(dut, level=1, timeout=100_000):

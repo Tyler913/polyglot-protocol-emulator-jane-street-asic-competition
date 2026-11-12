@@ -7,6 +7,7 @@ import cocotb
 from cocotb.triggers import ClockCycles, RisingEdge
 
 from lib.host import HostSpi
+from lib.pins import bit
 from lib.soc import build_firmware, start
 
 
@@ -59,11 +60,11 @@ async def test_blink(dut):
     # Record the cycle of each edge on uo[0]
     edges = []
     cycle = 0
-    last = int(dut.uo_out.value) & 1
+    last = bit(dut.uo_out, 0)
     while len(edges) < 9 and cycle < 5000:
         await RisingEdge(dut.clk)
         cycle += 1
-        v = int(dut.uo_out.value) & 1
+        v = bit(dut.uo_out, 0)
         if v != last:
             edges.append(cycle)
             last = v

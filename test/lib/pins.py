@@ -30,3 +30,13 @@ def ui_pins(dut):
     if key not in _drivers:
         _drivers[key] = UiPins(dut)
     return _drivers[key]
+
+
+def bit(signal, i):
+    """Bit i of a bus as 0/1. Gate-level sims can have X on bits the test
+    does not use, so read single bits instead of converting the whole bus."""
+    v = str(signal.value)
+    c = v[len(v) - 1 - i]
+    if c not in "01":
+        raise ValueError(f"{signal._name}[{i}] is {c}")
+    return int(c)

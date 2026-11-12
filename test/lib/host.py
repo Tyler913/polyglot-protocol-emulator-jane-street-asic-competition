@@ -7,7 +7,7 @@ Pins: ui[5] = SCK, ui[6] = MOSI, ui[7] = CS_N, uo[7] = MISO. SPI mode 0, MSB fir
 
 from cocotb.triggers import ClockCycles
 
-from .pins import ui_pins
+from .pins import bit, ui_pins
 
 CMD_WRITE = 0x01
 CMD_READ = 0x02
@@ -42,7 +42,7 @@ class HostSpi:
                 self._set(MOSI, (byte >> i) & 1)
                 await ClockCycles(clk, self.half)
                 self._set(SCK, 1)
-                r = (r << 1) | ((int(self.dut.uo_out.value) >> MISO) & 1)
+                r = (r << 1) | bit(self.dut.uo_out, MISO)
                 await ClockCycles(clk, self.half)
                 self._set(SCK, 0)
             rx.append(r)
