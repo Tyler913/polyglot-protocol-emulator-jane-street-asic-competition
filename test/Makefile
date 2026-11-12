@@ -46,7 +46,7 @@ VERILOG_SOURCES += $(PWD)/tb.v
 TOPLEVEL = tb
 
 # List test modules to run, separated by commas and without the .py suffix:
-COCOTB_TEST_MODULES = test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_usb,test_usb_hid,test_eth
+COCOTB_TEST_MODULES = test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_usb,test_usb_hid,test_eth,test_ws2812,test_onewire
 
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim

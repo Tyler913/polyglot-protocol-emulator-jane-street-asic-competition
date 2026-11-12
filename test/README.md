@@ -22,6 +22,8 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `test_usb.py` | USB low-speed line layer: DATA0 from the chip (NRZI, stuffing, CRC16, EOP, 33.33-cycle bits) and a host DATA1 into the chip with the hardware-timed ACK inside the 2..7.5 bit-time window |
 | `test_usb_hid.py` | USB low-speed HID keyboard written in C is enumerated by a host model (descriptors, SET_ADDRESS, SET_CONFIGURATION, SET_IDLE) and types "Hi"; every answer within the 7.5 bit-time turnaround |
 | `test_eth.py` | 10BASE-T transmit at a 40 MHz clock: Manchester, differential TD+/TD-, preamble/SFD, CRC-32 FCS checked with zlib |
-| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py` | independent UART, SPI, I2C, USB LS and 10BASE-T peer models; open-drain and USB bus models for the uio pins |
+| `test_ws2812.py` | WS2812 LEDs from a plain NRZ engine stream (3 line bits per LED bit), checked against datasheet pulse timing |
+| `test_onewire.py` | 1-Wire master from timed GPIO only (reset/presence, write and read slots), READ ROM from a DS18B20-style model with timing checks |
+| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py`, `lib/ws2812.py`, `lib/onewire.py` | independent UART, SPI, I2C, USB LS, 10BASE-T, WS2812 and 1-Wire peer models; open-drain and USB bus models for the uio pins |
 | `lib/pins.py` | shared driver for `ui_in` (several models drive different bits) |
 | `tb.v` | testbench wrapper around the top level |
