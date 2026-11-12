@@ -174,6 +174,6 @@ module pg_ahb (
 
   assign hrdata = dp_io ? reg_rdata : sram_rdata;
 
-  wire _unused = &{1'b0, dp_addr[31:12], htrans[0]};
+  wire _unused = &{1'b0, dp_addr[31:12], htrans[0], dp_size[2], host_addr[15:12]};
 
 endmodule

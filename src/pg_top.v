@@ -232,6 +232,6 @@ module tt_um_tyler913_polyglot (
 
   assign uo_out = {host_miso, 1'b0, proto_uo};
 
-  wire _unused = &{1'b0, ena};
+  wire _unused = &{1'b0, ena, host_ctrl[7:1]};
 
 endmodule
