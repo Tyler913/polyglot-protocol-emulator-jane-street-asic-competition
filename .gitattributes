@@ -1,0 +1,8 @@
+# Keep LF line endings in the repository and in working trees on every OS
+# (Makefiles, shell scripts and Verilog must stay LF on Windows/WSL too).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
+*.gds binary
+*.bin binary
