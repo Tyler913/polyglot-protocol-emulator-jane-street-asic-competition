@@ -1,0 +1,24 @@
+# Local-only material (planning notes, AI handoff, archives, datasheets)
+notes/
+CLAUDE.md
+archive/
+references/
+
+# Tools and build outputs
+.venv/
+__pycache__/
+*.pyc
+sim_build/
+results.xml
+*.vcd
+*.fst
+runs/
+*.elf
+*.bin
+*.hex
+*.map
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
