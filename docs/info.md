@@ -48,6 +48,8 @@ SPI: `sw/build/spi_ram.bin` drives SCK on uo[2], MOSI on uo[3], CS_N on uo[4] an
 
 USB low speed: `sw/build/usb_hid.bin` is a USB HID boot keyboard (D- uio[4], D+ uio[5], 1.5 kOhm pull-up on D-, series resistors / level shifting to 3.3 V USB levels as usual). After enumeration it types "Hi", then whatever arrives on its UART (ui[0], 115200 baud): a serial-to-USB keyboard.
 
+CAN: `sw/tests/can` shows CAN 2.0A at 500 kbit/s (TXD on uio[0], RXD on ui[2], through a CAN transceiver).
+
 Protocols without hardware support: `sw/build/ws2812.bin` drives WS2812 LEDs on uo[3] from a plain engine bit stream; `sw/build/onewire.bin` is a 1-Wire master on uio[6] made only from timed GPIO.
 
 I2C (pull-ups needed): `sw/build/i2c_eeprom.bin` talks to a 24C02 EEPROM on SDA uio[0] / SCL uio[1]; `sw/build/i2c_target.bin` makes the chip an I2C target at address 0x42 (16 registers) on SDA uio[2] / SCL uio[3].

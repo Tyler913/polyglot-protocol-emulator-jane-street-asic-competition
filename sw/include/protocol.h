@@ -268,6 +268,7 @@ typedef struct {
 #define WIRE_DIFF        (1u << 15)                /* CLK pin = complement of TX; SE0 = RX and GATE pins low */
 #define WIRE_RX_PACKET   (1u << 16)                /* async RX continues word after word until SE0 */
 #define WIRE_TAIL(n)     (((uint32_t)(n) & 3u) << 17)  /* drive n idle bits after the last word */
+#define WIRE_EOF_RUN(n)  (((uint32_t)(n) & 7u) << 19)  /* RX_PACKET also ends after n idle bits (CAN) */
 
 /* TXATTR bits (apply to the words pushed after the write) */
 #define WIRE_A_NOSTUFF   (1u << 0)
@@ -291,9 +292,13 @@ static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t ini
 /* Bit period for a rate in Hz in 1/256 cycles: DIV = x >> 8, DIV_FRAC = x & 0xFF */
 #define PG_BIT_FIX8(hz)  ((uint32_t)(((uint64_t)PG_F_CPU * 256u + (hz) / 2u) / (hz)))
 
-/* RX FIFO markers (WIRE_EVENTS); data words never have bit 31 set unless LEN is 32 */
+/* RX FIFO markers (WIRE_EVENTS); data words never have bit 31 set unless LEN is 32.
+ * After a packet whose length is not a whole number of words, the end marker
+ * carries the number of bits in the last (partial) word: WIRE_END_BITS(w). */
 #define WIRE_EV_START  0x80000001u
 #define WIRE_EV_END    0x80000002u
+#define WIRE_IS_END(w)   (((w) & 0xFFFFE0FFu) == WIRE_EV_END)
+#define WIRE_END_BITS(w) (((w) >> 8) & 31u)
 
 /* STATUS fields */
 #define WIRE_TX_LEVEL(s)  ((s) & 0xFu)
@@ -640,6 +645,94 @@ static inline void eth_send(pg_wire_t *w, const uint8_t *f, uint32_t n)
             i += 1;
         }
     }
+}
+
+/* ---- CAN 2.0A (11-bit identifiers): frame layer ----------------------------
+ * NRZ with stuffing after five equal bits, CRC-15 and arbitration by
+ * read-back are done by the engine; frames are built and parsed in C. TX goes
+ * to a transceiver's TXD (push-pull, recessive = 1), RX comes from RXD. Put
+ * TXD on a uio pin: it stays high-impedance (recessive through the
+ * transceiver's pull-up) until the program runs, while uo pins are 0
+ * (dominant) after reset. The
+ * engine compares every stuffed bit it sends with RXD and stops driving if a
+ * recessive bit reads dominant (lost arbitration). The receiver also sees
+ * the chip's own frames, which gives the ACK bit.
+ */
+
+static inline void can_init(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t bitrate)
+{
+    w->CTRL   = 0;
+    w->DIV    = PG_BIT_FIX8(bitrate) >> 8;
+    w->CTRL2  = WIRE_FRAC(PG_BIT_FIX8(bitrate)) | WIRE_RESYNC | WIRE_STUFF(5) | WIRE_STUFF_EQUAL |
+                WIRE_RX_PACKET | WIRE_EOF_RUN(7);
+    w->PINS   = WIRE_PINS(txd_pin, rxd_pin, 0);
+    wire_crc(w, 0x4599u, 15, 0, 0, 0);
+    w->TXATTR = 0;
+    w->CTRL   = WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_IDLE_HIGH | WIRE_RX_ASYNC |
+                WIRE_ARB_STOP | WIRE_EVENTS | WIRE_LEN(32);
+}
+
+/* Queue a data frame (0..8 bytes). The engine sends it at once; it needs
+ * at most 4 FIFO words. */
+static inline void can_send(pg_wire_t *w, uint32_t id, const uint8_t *d, uint32_t n)
+{
+    w->TXATTR = WIRE_A_CRC_INIT | (n ? 0u : WIRE_A_CRC_OUT);
+    wire_putn(w, 19, ((id & 0x7FFu) << 7) | (n & 15u));     /* SOF, ID, RTR, IDE, r0, DLC */
+    for (uint32_t i = 0; i < n; ) {
+        uint32_t k = n - i < 4u ? n - i : 4u, x = 0;
+        for (uint32_t j = 0; j < k; j++) x = (x << 8) | d[i + j];
+        i += k;
+        w->TXATTR = (i == n) ? WIRE_A_CRC_OUT : 0u;
+        wire_putn(w, (int)(8 * k), x);
+    }
+    w->TXATTR = WIRE_A_NOSTUFF | WIRE_A_NOCRC;
+    wire_putn(w, 13, 0x1FFFu);                     /* CRC delim, ACK slot, ACK delim, EOF, intermission */
+}
+
+typedef struct {
+    uint32_t id;
+    uint8_t  dlc;
+    uint8_t  data[8];
+    uint8_t  crc_ok;
+    uint8_t  acked;
+} can_frame_t;
+
+/* Receive one frame (blocks). Returns 0, or -1 if the frame was too short. */
+static inline int can_recv(pg_wire_t *w, can_frame_t *f)
+{
+    uint32_t words[4], nw = 0, w32, nbits;
+    for (;;) {                                      /* destuffed bits, MSB first, 32 per word */
+        w32 = wire_get(w);
+        if (WIRE_IS_END(w32)) break;
+        if (nw < 4) words[nw] = w32;
+        nw++;
+    }
+    nbits = (nw > 0 ? nw - (WIRE_END_BITS(w32) ? 1u : 0u) : 0u) * 32u + WIRE_END_BITS(w32);
+    if (nw > 4) nw = 4;
+#define CANBIT(i) ((words[(i) >> 5] >> (31u - ((i) & 31u))) & 1u)
+    if (nbits < 19u) return -1;
+    uint32_t id = 0, dlc = 0, crc = 0;
+    for (uint32_t i = 1; i <= 11; i++) id = (id << 1) | CANBIT(i);
+    for (uint32_t i = 15; i <= 18; i++) dlc = (dlc << 1) | CANBIT(i);
+    if (dlc > 8) dlc = 8;
+    uint32_t end = 19u + 8u * dlc;                 /* CRC field starts here */
+    if (nbits < end + 15u + 2u) return -1;
+    for (uint32_t i = 0; i < end + 15u; i++) {    /* CRC-15 over SOF..data, then the CRC: residual 0 */
+        uint32_t fb = CANBIT(i) ^ ((crc >> 14) & 1u);
+        crc = (crc << 1) & 0x7FFFu;
+        if (fb) crc ^= 0x4599u;
+    }
+    f->id = id;
+    f->dlc = (uint8_t)dlc;
+    for (uint32_t b = 0; b < dlc; b++) {
+        uint32_t x = 0;
+        for (uint32_t i = 0; i < 8; i++) x = (x << 1) | CANBIT(19u + 8u * b + i);
+        f->data[b] = (uint8_t)x;
+    }
+    f->crc_ok = (crc == 0);
+    f->acked  = (uint8_t)!CANBIT(end + 16u);         /* ACK slot after the CRC delimiter */
+#undef CANBIT
+    return 0;
 }
 
 #endif /* POLYGLOT_PROTOCOL_H */

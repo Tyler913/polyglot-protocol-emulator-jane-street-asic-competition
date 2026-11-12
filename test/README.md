@@ -24,6 +24,7 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `test_eth.py` | 10BASE-T transmit at a 40 MHz clock: Manchester, differential TD+/TD-, preamble/SFD, CRC-32 FCS checked with zlib |
 | `test_ws2812.py` | WS2812 LEDs from a plain NRZ engine stream (3 line bits per LED bit), checked against datasheet pulse timing |
 | `test_onewire.py` | 1-Wire master from timed GPIO only (reset/presence, write and read slots), READ ROM from a DS18B20-style model with timing checks |
-| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py`, `lib/ws2812.py`, `lib/onewire.py` | independent UART, SPI, I2C, USB LS, 10BASE-T, WS2812 and 1-Wire peer models; open-drain and USB bus models for the uio pins |
+| `test_can.py` | CAN 2.0A at 500 kbit/s against a CAN bus model with a second node: stuffing, CRC-15, ACK, and lost arbitration followed by a retry |
+| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py`, `lib/ws2812.py`, `lib/onewire.py`, `lib/can.py` | independent UART, SPI, I2C, USB LS, 10BASE-T, WS2812, 1-Wire and CAN peer models; open-drain and USB bus models for the uio pins |
 | `lib/pins.py` | shared driver for `ui_in` (several models drive different bits) |
 | `tb.v` | testbench wrapper around the top level |

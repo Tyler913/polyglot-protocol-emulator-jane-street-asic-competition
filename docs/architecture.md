@@ -76,7 +76,8 @@ A Wire Engine is a serial engine with no protocol in it. Protocols are parameter
 | NRZI, stuffing, CRC16, differential pair with SE0, packet RX until SE0 | USB low speed |
 | Auto-reply: a queued answer leaves TURN cycles after the end of a received packet that matches RXMATCH | USB handshakes and IN data within the 7.5-bit-time limit |
 | Manchester, CRC-32, idle tail (TP_IDL) | 10BASE-T transmit |
-| Arbitration-lost detection | I2C multi-controller, CAN (planned) |
+| Arbitration by read-back (open drain or a separate RX pin), stuffing after five equal bits, CRC-15, end of frame by an idle run | CAN 2.0A |
+| Partial last word at a packet end (bit count in the end marker) | CAN frames of any length |
 
 The engine never decides *what* to send; it only decides *when* each bit moves. For example, the USB device in `sw/examples/usb_hid` is ordinary C, yet every answer starts 3.1 bit times after the host's packet, because C queues the answer early and the engine releases it at the right moment *(simulation)*.
 

@@ -15,6 +15,10 @@
  *   0x04 RX     R   pop a received word (right-aligned). Blocks while the RX
  *                   FIFO is empty. Frame events (CTRL.EVENTS) arrive as
  *                   0x8000_0001 (frame start) and 0x8000_0002 (frame end).
+ *                   At the end of an RX_PACKET packet, bits that do not fill
+ *                   a word are pushed as a last word (in their word
+ *                   positions), and the end marker carries their number in
+ *                   bits [12:8].
  *   0x08 STATUS R   [3:0] TX FIFO level, [11:8] RX FIFO level,
  *                   [16] TX active (shifting, finishing, or FIFO not empty),
  *                   [17] RX frame in progress (async mode), [18] frame
@@ -44,8 +48,9 @@
  *                   high), [25] EVENTS (frame start/end words into the RX
  *                   FIFO), [26] STRETCH (external clock: at a word boundary
  *                   with an empty TX FIFO, hold the CLK pin low until a word
- *                   is pushed), [27] ARB_STOP (stop driving after a lost
- *                   arbitration)
+ *                   is pushed), [27] ARB_STOP (after a lost arbitration send
+ *                   only the IDLE level; with it the read-back compare also
+ *                   works on push-pull lines with a separate RX pin, e.g. CAN)
  *   0x10 DIV    RW  [15:0] bit period in clock cycles (>= 2)
  *   0x14 PINS   RW  [4:0] TX pin, [12:8] RX pin, [20:16] CLK pin,
  *                   [28:24] GATE pin
@@ -68,7 +73,10 @@
  *                   receiving word after word until SE0 instead of stopping
  *                   after one word), [18:17] TAIL_BITS: after the last word
  *                   the TX line stays driven at the IDLE level for 0..3 more
- *                   bit times (USB end-of-packet J, 10BASE-T idle)
+ *                   bit times (USB end-of-packet J, 10BASE-T idle),
+ *                   [21:19] EOF_RUN: with RX_PACKET, a packet also ends after
+ *                   this many consecutive idle-level bits (CAN end of frame;
+ *                   a run of idle bits is then not a stuff error)
  *   0x20 TXATTR RW  attributes of the words pushed from now on: [0] NOSTUFF,
  *                   [1] NOCRC (not part of the CRC), [2] CRC_INIT (reset the
  *                   TX CRC before this word), [3] CRC_OUT (send the TX CRC,
@@ -158,7 +166,7 @@ module pg_wire #(
   // Configuration
   // ---------------------------------------------------------------------
   reg [27:0] ctrl;
-  reg [18:0] ctrl2;
+  reg [21:0] ctrl2;
   reg [5:0]  txattr;
   reg [12:0] crccfg;
   reg [31:0] crcinit;
@@ -197,6 +205,7 @@ module pg_wire #(
   wire       diff       = full && ctrl2[15];
   wire       rx_packet  = full && ctrl2[16];
   wire [1:0] tail_bits  = full ? ctrl2[18:17] : 2'd0;
+  wire [2:0] eof_run    = full ? ctrl2[21:19] : 3'd0;
   wire [4:0]  crc_lm1   = crccfg[4:0];
   wire        crc_xor   = crccfg[5];
   wire [4:0]  rx_skip   = crccfg[12:8];
@@ -548,6 +557,7 @@ module pg_wire #(
   reg        rlast;         // previous decoded bit
   reg [4:0]  rbits;         // decoded bits since the frame start (saturating), for RX_SKIP
   reg [3:0]  rwidx;         // words completed in this packet (saturating), for RXMATCH
+  reg [2:0]  irun;          // consecutive idle-level samples (EOF_RUN)
   reg [31:0] rcrc;
   wire [8:0] racc_sum = {1'b0, racc} + {1'b0, frac};
   wire [15:0] rbit_m1 = div - 16'd1 + {15'd0, racc_sum[8]};
@@ -580,15 +590,36 @@ module pg_wire #(
   wire       rx_glitch  = async_mode && (rbits == 5'd0) && (rx_in == idle) && !se0_in;
   wire       rx_sample  = async_mode ? (rx_busy && (rtmr == half))
                                      : (clk_ext ? ext_sample : int_samp_d);
-  wire       rx_eop     = rx_sample && rx_packet && se0_in;
+  wire       rx_eof     = rx_packet && (eof_run != 3'd0) && (rx_in == idle) &&
+                          ({1'b0, irun} + 4'd1 >= {1'b0, eof_run});
+  wire       rx_eop     = rx_sample && rx_packet && (se0_in || rx_eof);
   wire       rx_data    = rx_sample && !rx_eop && !rx_glitch && !rx_is_stuf;
   wire       rx_last    = (rx_cnt == rx_len);
   assign     rx_pkt_end = rx_eop;
 
+  reg        end_pend;      // end marker still to push after a partial last word
+  reg  [4:0] end_bits;
   wire data_push = rx_en && rx_data && rx_last;
-  wire ev_push   = events && (f_start || f_stop || rx_eop) && !data_push;
-  assign rxf_push = data_push || ev_push;
-  assign rxf_din  = data_push ? rx_word : {30'd0, f_stop || rx_eop, f_start} | 32'h8000_0000;
+  wire part_push = rx_en && rx_eop && (rx_cnt != 5'd0);
+  wire ev_end    = (rx_eop && !part_push) || end_pend;
+  wire ev_push   = events && (f_start || f_stop || ev_end) && !data_push && !part_push;
+  wire [4:0] ev_bits = end_pend ? end_bits : 5'd0;
+  assign rxf_push = data_push || part_push || ev_push;
+  assign rxf_din  = data_push ? rx_word :
+                    part_push ? rx_sh :
+                    {19'd0, ev_bits, 6'd0, f_stop || ev_end, f_start} | 32'h8000_0000;
+
+  always @(posedge clk) begin
+    if (srst) begin
+      end_pend <= 1'b0;
+      end_bits <= 5'd0;
+    end else if (part_push) begin
+      end_pend <= 1'b1;
+      end_bits <= rx_cnt;
+    end else if (ev_push || !events) begin
+      end_pend <= 1'b0;
+    end
+  end
 
   always @(posedge clk) begin
     if (srst) begin
@@ -603,6 +634,7 @@ module pg_wire #(
       rbits   <= 5'd0;
       rcrc    <= 32'd0;
       rwidx   <= 4'd0;
+      irun    <= 3'd0;
       match_ok <= 1'b1;
     end else begin
       if (rx_start || (resync && rx_busy && rx_in != rx_prev)) begin
@@ -615,6 +647,7 @@ module pg_wire #(
           rlast <= idle;
           rbits <= 5'd0;
           rwidx <= 4'd0;
+          irun  <= 3'd0;
           match_ok <= (rxmatch[15:8] == 8'd0);
           rcrc  <= crcinit;
           rx_sh <= 32'd0;
@@ -638,6 +671,7 @@ module pg_wire #(
         rx_busy <= 1'b0;
       end else if (rx_sample) begin
         rlvl <= rx_in;
+        irun <= (rx_in == idle) ? ((irun == 3'd7) ? irun : irun + 3'd1) : 3'd0;
         if (rx_glitch) begin
           rx_sh   <= 32'd0;
           rx_cnt  <= 5'd0;
@@ -688,14 +722,13 @@ module pg_wire #(
   // ---------------------------------------------------------------------
   wire od       = (oe_mode == 2'd2);
   wire tx_shown = !gated || active;           // gated frames hide the TX line outside the frame
-  wire drv_line = tx_shown ? line : idle;
-  wire arb_off  = arb_stop && arb_lost;
+  wire drv_line = (tx_shown && !arb_off) ? line : idle;
+  wire arb_off  = arb_stop && arb_lost;   // lost: send only the idle (recessive) level
 
   assign tx_pin = txpin;
   assign tx_on  = en && tx_en;
   assign tx_val = od ? 1'b0 : drv_line;
-  assign tx_oe  = arb_off ? 1'b0 :
-                  (oe_mode == 2'd0) ? 1'b1 :
+  assign tx_oe  = (oe_mode == 2'd0) ? 1'b1 :
                   (oe_mode == 2'd1) ? (gated ? active : (tx_busy || tail || itail_on)) :
                   od                ? !drv_line : 1'b0;
 
@@ -741,7 +774,7 @@ module pg_wire #(
         R_CTRL:    rdata = {4'd0, ctrl};
         R_DIV:     rdata = {16'd0, div};
         R_PINS:    rdata = {3'd0, gtpin, 3'd0, ckpin, 3'd0, rxpin, 3'd0, txpin};
-        R_CTRL2:   rdata = {13'd0, ctrl2};
+        R_CTRL2:   rdata = {10'd0, ctrl2};
         R_TXATTR:  rdata = full ? {26'd0, txattr} : 32'd0;
         R_CRCCFG:  rdata = full ? {19'd0, crccfg} : 32'd0;
         R_CRCINIT: rdata = full ? crcinit : 32'd0;
@@ -759,7 +792,7 @@ module pg_wire #(
   always @(posedge clk) begin
     if (rst) begin
       ctrl    <= 28'd0;
-      ctrl2   <= 19'd0;
+      ctrl2   <= 22'd0;
       txattr  <= 6'd0;
       crccfg  <= 13'd0;
       crcinit <= 32'd0;
@@ -774,7 +807,7 @@ module pg_wire #(
     end else if (cfg_wr) begin
       case (ra)
         R_CTRL:    ctrl    <= wdata[27:0];
-        R_CTRL2:   ctrl2   <= wdata[18:0];
+        R_CTRL2:   ctrl2   <= wdata[21:0];
         R_TXATTR:  txattr  <= wdata[5:0];
         R_CRCCFG:  crccfg  <= wdata[12:0];
         R_CRCINIT: crcinit <= wdata;
@@ -793,7 +826,11 @@ module pg_wire #(
     end
   end
 
-  wire arb_check = od && tx_busy && line && !rx_in && (clk_ext ? ext_sample : int_sample);
+  // Read-back compare on words that are not NOSTUFF (CAN: the arbitration and
+  // data fields; the ACK slot is in a NOSTUFF word, where a dominant bit is an
+  // acknowledgement, not a lost arbitration)
+  wire arb_check = (od || arb_stop) && tx_busy && !a_nostuff && line && !rx_in &&
+                   (clk_ext ? ext_sample : int_sample);
 
   wire _unused = &{1'b0, tx_attr[5], tx_attr[2]};   // CRC_INIT and AFTER_RX act at load time
 
@@ -807,7 +844,8 @@ module pg_wire #(
       else if (cfg_wr && ra == R_STATUS && wdata[24])       rx_ovf <= 1'b0;
       if (arb_check)                                         arb_lost <= 1'b1;
       else if (cfg_wr && ra == R_STATUS && wdata[25])       arb_lost <= 1'b0;
-      if (rx_sample && rx_is_stuf && rstuf_bad && !rx_eop)   stuff_err <= 1'b1;
+      if (rx_sample && rx_is_stuf && rstuf_bad && !rx_eop &&
+          !(eof_run != 3'd0 && rx_in == idle))               stuff_err <= 1'b1;
       else if (cfg_wr && ra == R_STATUS && wdata[26])       stuff_err <= 1'b0;
     end
   end

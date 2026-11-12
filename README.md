@@ -4,7 +4,7 @@ An entry for the [Jane Street protocol emulator ASIC competition](https://blog.j
 
 A small RISC-V core runs ordinary C compiled with stock GCC or Clang. Protocol-agnostic, timed *wire engines* move bits on exact clock cycles. One header, `protocol.h`, is the whole toolchain. There is no custom assembler and no custom compiler.
 
-**Status:** W3. The CPU, SRAM, host SPI loader, timed GPIO (cycle-exact edges from C), edge capture and Wire Engine v2 pass RTL simulation. UART, SPI and I2C, each in both roles, are built from the engines in a few lines of C and checked against independent peer models.
+**Status:** UART, SPI and I2C (both roles each), a USB low-speed HID keyboard, 10BASE-T transmit, CAN 2.0A, WS2812 and 1-Wire run as C firmware on the RTL and are checked against independent peer models. The full design (with the SRAM macro) passes the Tiny Tapeout flow locally: LVS and DRC clean, timing met at 50 MHz, precheck passes.
 
 ## Layout
 

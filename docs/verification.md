@@ -21,6 +21,7 @@
 | `test_eth` | `eth_tx` | IEEE 802.3 transmit decoder (`lib/eth.py`): Manchester symbols, differential pair, preamble/SFD, FCS checked with zlib, TP_IDL; run at a 40 MHz clock |
 | `test_ws2812` | `ws2812` | WS2812 datasheet timing model: high-pulse widths and bit periods |
 | `test_onewire` | `onewire` | 1-Wire device model (DS18B20-style ROM): reset/presence, write and read slot timing; CRC-8 checked in C |
+| `test_can` | `can` | CAN bus model (`lib/can.py`, wired-AND bus with transceiver delay) and a second controller node: stuffing, CRC-15, ACK; the node joins the chip's SOF with a lower identifier, the chip loses arbitration at identifier bit 5, receives the winner's frame and retries. Limitation: the chip does not yet drive the ACK slot as a receiver |
 
 All tests also run in GitHub Actions on every push.
 
@@ -30,6 +31,7 @@ Independent models catch mistakes in both the RTL and the test itself. Examples 
 
 - RTL: after a UART frame with a low stop bit, the receiver started a phantom frame because it reacted to the line *level*. Fixed: start on an *edge* from idle, and drop a frame whose start bit is gone at mid-bit (glitch filter).
 - RTL design gaps found while writing the I2C and USB tests: an external-clock engine must change data only on the launch edge (otherwise an I2C target would make a false START/STOP); a pre-queued auto-reply must not fire on a packet that ended before it was queued; cancelling a queued answer must not reset the receiver.
+- Board-level issue found by the CAN model: after reset all `uo` outputs are 0, which on a CAN TXD is *dominant* and would block the bus while the program loads. CAN TXD therefore goes on a `uio` pin, which is high-impedance until the program enables the engine.
 - Test-side bugs (the RTL was right): an I2C controller model that released SDA for START, an EEPROM model that took a repeated START's SCL rise for a data bit, a 1-Wire model that took its own presence release for a reset.
 
 ## Gate level and sign-off
