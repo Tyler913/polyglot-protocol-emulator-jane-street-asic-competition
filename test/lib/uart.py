@@ -3,10 +3,11 @@
 """Independent UART peer model (8N1), written from the UART frame format,
 not from the RTL. Time is counted in system clock cycles.
 
+Bit periods may be fractional (e.g. 16.667 cycles at 3 Mbaud, 50 MHz).
 UartMonitor decodes a line by sampling at the middle of each bit and, in
-strict mode, also checks that every edge inside a frame falls exactly on a
-bit boundary (start edge + k * bit_cycles).
-UartDriver sends frames on a ui_in bit.
+strict mode, also checks that every edge inside a frame lies within one
+cycle of a bit boundary (start edge + k * bit period).
+UartDriver sends frames on a ui_in bit, optionally with a rate error.
 """
 
 import cocotb
@@ -16,8 +17,8 @@ from .pins import ui_pins
 
 
 def bit_cycles(baud, f_clk=50_000_000):
-    """Cycles per bit, rounded to nearest (the UART spec only needs ~2%)."""
-    return (f_clk + baud // 2) // baud
+    """Cycles per bit (exact, may be fractional)."""
+    return f_clk / baud
 
 
 class UartMonitor:
@@ -57,16 +58,16 @@ class UartMonitor:
             edges = []
             level = 0
             samples = []
+            points = [round((k + 0.5) * self.bit) for k in range(10)]
             # Walk through the frame cycle by cycle until the middle of the stop bit
-            frame_end = start + 9 * self.bit + self.bit // 2
+            frame_end = start + points[-1]
             while clk_n < frame_end:
                 v = await self._sample()
                 clk_n += 1
                 if v != level:
                     edges.append(clk_n - start)
                     level = v
-                pos = clk_n - start
-                if pos % self.bit == self.bit // 2:
+                if clk_n - start in points:
                     samples.append(v)
             if len(samples) != 10:
                 self.errors.append(f"internal: {len(samples)} samples")
@@ -76,27 +77,36 @@ class UartMonitor:
                 self.errors.append(f"framing error: stop bit low (frame at {start})")
             byte = sum(b << i for i, b in enumerate(samples[1:9]))
             if self.strict:
-                bad = [e for e in edges if e % self.bit != 0]
+                bad = [e for e in edges if abs(e / self.bit - round(e / self.bit)) * self.bit > 1.0]
                 if bad:
-                    self.errors.append(f"byte {byte:#04x}: edges off the bit grid at {bad} (bit = {self.bit})")
+                    self.errors.append(f"byte {byte:#04x}: edges off the bit grid at {bad} (bit = {self.bit:.3f})")
             self.bytes.append(byte)
             last = level
 
 
 class UartDriver:
-    def __init__(self, dut, ui_bit, bit):
+    def __init__(self, dut, ui_bit, bit, rate_error=0.0):
         self.dut = dut
         self.ui = ui_pins(dut)
         self.ui_bit = ui_bit
-        self.bit = bit
+        self.bit = bit / (1.0 + rate_error)  # rate_error > 0: sender runs fast
         self.ui.set(ui_bit, 1)
+        self.t = 0.0  # fractional cycle position, so long streams keep the exact rate
+        self.n = 0
+
+    async def _hold(self, bits):
+        self.t += bits * self.bit
+        k = round(self.t) - self.n
+        self.n += k
+        if k:
+            await ClockCycles(self.dut.clk, k)
 
     async def send(self, data, gap_bits=0, stop=1):
         for b in data:
             frame = [0] + [(b >> i) & 1 for i in range(8)] + [stop]
             for v in frame:
                 self.ui.set(self.ui_bit, v)
-                await ClockCycles(self.dut.clk, self.bit)
+                await self._hold(1)
             self.ui.set(self.ui_bit, 1)
             if gap_bits:
-                await ClockCycles(self.dut.clk, gap_bits * self.bit)
+                await self._hold(gap_bits)

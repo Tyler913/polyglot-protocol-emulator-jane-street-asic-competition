@@ -200,7 +200,8 @@ typedef struct {
     volatile uint32_t DIV;      /* bit period in cycles (>= 2) */
     volatile uint32_t PINS;
     volatile uint32_t FLUSH;    /* read blocks until everything is sent */
-    uint32_t _pad[25];
+    volatile uint32_t CTRL2;    /* fractional bit period, RX resync */
+    uint32_t _pad[24];
     volatile uint32_t TXN[32];  /* TXN[n-1] = x pushes an n-bit word */
 } pg_wire_t;
 
@@ -236,6 +237,13 @@ typedef struct {
 #define WIRE_PINS(tx, rx, clk)  ((uint32_t)(tx) | ((uint32_t)(rx) << 8) | ((uint32_t)(clk) << 16))
 #define WIRE_GATE_PIN(g)        ((uint32_t)(g) << 24)
 
+/* CTRL2 bits */
+#define WIRE_FRAC(f)     ((uint32_t)(f) & 0xFFu)   /* bit period = DIV + f/256 cycles */
+#define WIRE_RESYNC      (1u << 8)                 /* async RX realigns on every edge */
+
+/* Bit period for a rate in Hz in 1/256 cycles: DIV = x >> 8, DIV_FRAC = x & 0xFF */
+#define PG_BIT_FIX8(hz)  ((uint32_t)(((uint64_t)PG_F_CPU * 256u + (hz) / 2u) / (hz)))
+
 /* RX FIFO markers (WIRE_EVENTS); data words never have bit 31 set unless LEN is 32 */
 #define WIRE_EV_START  0x80000001u
 #define WIRE_EV_END    0x80000002u
@@ -254,15 +262,17 @@ typedef struct {
     uint32_t ctrl;
     uint32_t div;
     uint32_t pins;
+    uint32_t ctrl2;
 } wire_cfg_t;
 
 /* Disable (clears FIFOs and state), set the bit clock and pins, then enable. */
 static inline void wire_config(pg_wire_t *w, wire_cfg_t c)
 {
-    w->CTRL = 0;
-    w->DIV  = c.div;
-    w->PINS = c.pins;
-    w->CTRL = c.ctrl;
+    w->CTRL  = 0;
+    w->DIV   = c.div;
+    w->CTRL2 = c.ctrl2;
+    w->PINS  = c.pins;
+    w->CTRL  = c.ctrl;
 }
 
 static inline void     wire_put(pg_wire_t *w, uint32_t x) { w->TX = x; }
@@ -274,11 +284,14 @@ static inline void     wire_flush(pg_wire_t *w)           { (void)w->FLUSH; }
 /* ---- UART: just parameters ------------------------------------------------------
  * A UART frame is a 10-bit word sent LSB first: start bit 0, 8 data bits,
  * stop bit 1. The line idles high, and RX starts on the falling start edge.
+ * The bit period is exact to 1/256 cycle (fractional divider) and RX
+ * realigns on every edge, so odd rates like 3 Mbaud at 50 MHz work.
  */
 
 #define WIRE_UART_8N1(tx_pin, rx_pin, baud) ((wire_cfg_t){                      \
     WIRE_EN | WIRE_TX | WIRE_RX | WIRE_IDLE_HIGH | WIRE_RX_ASYNC | WIRE_LEN(10), \
-    PG_BIT_TICKS(baud), WIRE_PINS(tx_pin, rx_pin, 0) })
+    PG_BIT_FIX8(baud) >> 8, WIRE_PINS(tx_pin, rx_pin, 0),                     \
+    WIRE_FRAC(PG_BIT_FIX8(baud)) | WIRE_RESYNC })
 
 static inline void uart_putc(pg_wire_t *w, uint8_t b) { w->TX = 0x200u | ((uint32_t)b << 1); }
 
@@ -307,7 +320,7 @@ static inline int uart_getc(pg_wire_t *w)
  * later sample point: rx_delay cycles (0..7), e.g. 3 at F/4. */
 #define WIRE_SPI_CTRL_DLY(sck_pin, mosi_pin, miso_pin, mode, hz, rx_delay) ((wire_cfg_t){ \
     WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_CLK_OUT | WIRE_SPI_MODE(mode) | WIRE_LEN(8) | \
-    WIRE_RX_DELAY(rx_delay), PG_BIT_TICKS(hz), WIRE_PINS(mosi_pin, miso_pin, sck_pin) })
+    WIRE_RX_DELAY(rx_delay), PG_BIT_TICKS(hz), WIRE_PINS(mosi_pin, miso_pin, sck_pin), 0u })
 
 static inline void spi_select(int cs_pin) { pin_write(cs_pin, 0); }
 
@@ -345,7 +358,7 @@ static inline void spi_transfer(pg_wire_t *w, const uint8_t *tx, uint8_t *rx, ui
 #define WIRE_SPI_TARGET(sck_pin, mosi_pin, miso_pin, cs_pin, mode) ((wire_cfg_t){       \
     WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_CLK_EXT | WIRE_SPI_MODE(mode) | WIRE_LEN(8) | \
     WIRE_GATE_LOW | WIRE_EVENTS | WIRE_OE_FRAME, \
-    2u, WIRE_PINS(miso_pin, mosi_pin, sck_pin) | WIRE_GATE_PIN(cs_pin) })
+    2u, WIRE_PINS(miso_pin, mosi_pin, sck_pin) | WIRE_GATE_PIN(cs_pin), 0u })
 
 /* ---- I2C controller: parameters plus START/STOP in C --------------------------
  * SDA is the engine's TX and RX pin (open drain), SCL its clock pin (open
@@ -451,6 +464,6 @@ static inline uint8_t i2c_read(const i2c_t *b, int ack)
 #define WIRE_I2C_TARGET(sda_pin, scl_pin) ((wire_cfg_t){                         \
     WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_IDLE_HIGH | WIRE_OE_OPEN_DRAIN | \
     WIRE_CLK_EXT | WIRE_GATE_I2C | WIRE_EVENTS | WIRE_STRETCH | WIRE_LEN(8),        \
-    2u, WIRE_PINS(sda_pin, sda_pin, scl_pin) })
+    2u, WIRE_PINS(sda_pin, sda_pin, scl_pin), 0u })
 
 #endif /* POLYGLOT_PROTOCOL_H */

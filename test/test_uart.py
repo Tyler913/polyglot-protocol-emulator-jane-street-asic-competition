@@ -14,24 +14,24 @@ TX_UO = 1  # chip TX on uo[1]
 RX_UI = 0  # chip RX on ui[0]
 
 
-async def run_echo(dut, baud, text, gap_bits=0):
+async def run_echo(dut, baud, text, gap_bits=0, rate_error=0.0):
     bit = bit_cycles(baud)
     host = await start(dut)
     mon = UartMonitor(dut, lambda: (int(dut.uo_out.value) >> TX_UO) & 1, bit)
-    drv = UartDriver(dut, RX_UI, bit)
+    drv = UartDriver(dut, RX_UI, bit, rate_error)
     await load(host, "uart_echo", [baud])
     mon.start()
     await host.ctrl(0x01)
-    await wait_irq(dut, 1, timeout=150 * bit)  # banner (10 frames) blocks on the 4-deep TX FIFO
+    await wait_irq(dut, 1, timeout=int(150 * bit))  # banner (10 frames) blocks on the 4-deep TX FIFO
 
     banner = b"Polyglot\r\n"
     await drv.send(text, gap_bits=gap_bits)
     total = len(banner) + len(text)
-    for _ in range(100 * bit):  # echoes trail the input by up to ~5 frames (banner backlog)
+    for _ in range(int(100 * bit)):  # echoes trail the input by up to ~5 frames (banner backlog)
         if len(mon.bytes) >= total:
             break
         await ClockCycles(dut.clk, 1)
-    await ClockCycles(dut.clk, 2 * bit)
+    await ClockCycles(dut.clk, int(2 * bit))
     return host, mon, drv, banner
 
 
@@ -46,9 +46,9 @@ async def test_uart_echo_1mbaud(dut):
 
     # A frame with a low stop bit must be reported, and the next byte still works
     await drv.send(b"q", stop=0)
-    await ClockCycles(dut.clk, 3 * bit_cycles(1_000_000))
+    await drv._hold(3)
     await drv.send(b"k")
-    await ClockCycles(dut.clk, 15 * bit_cycles(1_000_000))
+    await ClockCycles(dut.clk, int(15 * bit_cycles(1_000_000)))
     assert bytes(mon.bytes[-1:]) == b"K", f"after the bad frame: {bytes(mon.bytes)!r}"
     # The CPU is blocked in uart_getc (bus idle), so the host can read the counters
     echoed, framing = await read_shared(host, 1, 2)
@@ -62,3 +62,12 @@ async def test_uart_echo_115200(dut):
     _, mon, _, banner = await run_echo(dut, 115_200, text, gap_bits=2)
     assert not mon.errors, mon.errors
     assert bytes(mon.bytes) == banner + b"OK?", f"received {bytes(mon.bytes)!r}"
+
+
+@cocotb.test()
+async def test_uart_echo_3mbaud_fractional(dut):
+    """3 Mbaud = 16.667 cycles per bit: fractional divider, back to back; the sender runs 3% fast."""
+    text = b"fractional baud rate & resync 0123456789"
+    _, mon, _, banner = await run_echo(dut, 3_000_000, text, rate_error=0.03)
+    assert not mon.errors, mon.errors
+    assert bytes(mon.bytes) == banner + text.upper(), f"received {bytes(mon.bytes)!r}"

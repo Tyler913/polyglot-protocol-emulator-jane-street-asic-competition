@@ -50,6 +50,10 @@
  *                   [28:24] GATE pin
  *   0x18 FLUSH  R   blocks until the TX FIFO is empty and the last word has
  *                   been fully sent (internal clock); reads 0
+ *   0x1C CTRL2  RW  [7:0] DIV_FRAC: the bit period is DIV + DIV_FRAC/256 cycles
+ *                   on average (a bit is one cycle longer whenever an 8-bit
+ *                   phase accumulator overflows), [8] RESYNC: async RX
+ *                   restarts its bit timer on every edge of the RX line
  *   0x80 + 4*(n-1)  W  push a word of n bits (n = 1..32), whatever CTRL.LEN
  *
  * Bit timing, internal clock: each bit lasts DIV cycles. The TX line changes
@@ -100,13 +104,14 @@ module pg_wire #(
     output wire        clk_oe
 );
 
-  localparam [2:0] R_TX = 3'd0, R_RX = 3'd1, R_STATUS = 3'd2, R_CTRL = 3'd3,
-                   R_DIV = 3'd4, R_PINS = 3'd5, R_FLUSH = 3'd6;
+  localparam [3:0] R_TX = 4'd0, R_RX = 4'd1, R_STATUS = 4'd2, R_CTRL = 4'd3,
+                   R_DIV = 4'd4, R_PINS = 4'd5, R_FLUSH = 4'd6, R_CTRL2 = 4'd7;
 
   // ---------------------------------------------------------------------
   // Configuration
   // ---------------------------------------------------------------------
   reg [27:0] ctrl;
+  reg [8:0]  ctrl2;
   reg [15:0] div;
   reg [4:0]  txpin, rxpin, ckpin, gtpin;
 
@@ -130,14 +135,16 @@ module pg_wire #(
   wire       events     = ctrl[25];
   wire       stretch_en = ctrl[26];
   wire       arb_stop   = ctrl[27];
+  wire [7:0] frac       = ctrl2[7:0];
+  wire       resync     = ctrl2[8];
 
   wire [15:0] half = {1'b0, div[15:1]};                     // sample point (counting down from DIV-1)
   wire [15:0] qpt  = div - 16'd1 - {2'b00, div[15:2]};      // quarter bit after the start
 
   wire sel     = valid && (addr[1:0] == 2'd0);
   wire tx_win  = sel && addr[7];                            // 0x80..0xFC: push with length
-  wire reg_sel = sel && !addr[7] && (addr[6:5] == 2'd0);
-  wire [2:0] ra = addr[4:2];
+  wire reg_sel = sel && !addr[7] && !addr[6];
+  wire [3:0] ra = addr[5:2];
 
   // Engine state is cleared while disabled
   wire srst = rst || !en;
@@ -218,6 +225,11 @@ module pg_wire #(
   reg        prev_bit;   // line value before the current bit (TX_LATE)
   reg        boundary;   // ext clock: a word ended; the next one waits for a launch edge
   reg        stretching;
+  reg  [7:0] tacc;       // fractional bit period accumulator (TX timer)
+
+  // Next bit length: DIV, plus one cycle when the accumulator overflows
+  wire [8:0] tacc_sum = {1'b0, tacc} + {1'b0, frac};
+  wire [15:0] tbit_m1 = div - 16'd1 + {15'd0, tacc_sum[8]};
 
   wire [4:0] tx_idx  = msb_first ? (tx_len - tx_cnt) : tx_cnt;
   wire       tx_bit  = tx_sh[tx_idx];
@@ -249,6 +261,7 @@ module pg_wire #(
       second   <= 1'b0;
       sampled  <= 1'b0;
       prev_bit <= 1'b1;
+      tacc     <= 8'd0;
     end else begin
       if (tx_load) begin
         tx_busy  <= 1'b1;
@@ -256,13 +269,15 @@ module pg_wire #(
         tx_sh    <= txf_dout[31:0];
         tx_len   <= txf_dout[36:32];
         tx_cnt   <= 5'd0;
-        tmr      <= div - 16'd1;
+        tmr      <= tbit_m1;
+        tacc     <= tacc_sum[7:0];
         second   <= 1'b0;
         sampled  <= 1'b0;
         prev_bit <= line;
       end else if (tx_busy && !clk_ext) begin
         if (int_end) begin
-          tmr      <= div - 16'd1;
+          tmr      <= tbit_m1;
+          tacc     <= tacc_sum[7:0];
           second   <= 1'b0;
           sampled  <= 1'b0;
           prev_bit <= tx_bit;
@@ -328,6 +343,9 @@ module pg_wire #(
   reg [15:0] rtmr;
   reg        rx_ovf, arb_lost;
   reg [6:0]  samp_d;        // delayed internal sample strobes (RX_DELAY)
+  reg [7:0]  racc;          // fractional bit period accumulator (async RX timer)
+  wire [8:0] racc_sum = {1'b0, racc} + {1'b0, frac};
+  wire [15:0] rbit_m1 = div - 16'd1 + {15'd0, racc_sum[8]};
 
   always @(posedge clk) begin
     if (srst) samp_d <= 7'd0;
@@ -358,12 +376,19 @@ module pg_wire #(
       rx_sh   <= 32'd0;
       rx_cnt  <= 5'd0;
       rtmr    <= 16'd0;
+      racc    <= 8'd0;
     end else begin
-      if (rx_start) begin
-        rx_busy <= 1'b1;
+      if (rx_start || (resync && rx_busy && rx_in != rx_prev)) begin
+        rx_busy <= 1'b1;             // a start edge, or (RESYNC) any edge: realign the bit timer
         rtmr    <= div - 16'd1;
+        if (rx_start) racc <= 8'd0;
       end else if (rx_busy) begin
-        rtmr <= (rtmr == 16'd0) ? div - 16'd1 : rtmr - 16'd1;
+        if (rtmr == 16'd0) begin
+          rtmr <= rbit_m1;
+          racc <= racc_sum[7:0];
+        end else begin
+          rtmr <= rtmr - 16'd1;
+        end
       end
 
       if (f_start || f_stop) begin
@@ -452,6 +477,7 @@ module pg_wire #(
         R_STATUS: rdata = {6'd0, arb_lost, rx_ovf, 4'd0, stretching, active, rx_busy, tx_active,
                            4'd0, rxl, 4'd0, txl};
         R_CTRL:   rdata = {4'd0, ctrl};
+        R_CTRL2:  rdata = {23'd0, ctrl2};
         R_DIV:    rdata = {16'd0, div};
         R_PINS:   rdata = {3'd0, gtpin, 3'd0, ckpin, 3'd0, rxpin, 3'd0, txpin};
         default:  rdata = 32'd0;
@@ -464,6 +490,7 @@ module pg_wire #(
   always @(posedge clk) begin
     if (rst) begin
       ctrl  <= 28'd0;
+      ctrl2 <= 9'd0;
       div   <= 16'd2;
       txpin <= 5'd0;
       rxpin <= 5'd0;
@@ -472,6 +499,7 @@ module pg_wire #(
     end else if (cfg_wr) begin
       case (ra)
         R_CTRL: ctrl <= wdata[27:0];
+        R_CTRL2: ctrl2 <= wdata[8:0];
         R_DIV:  div  <= (wdata[15:0] < 16'd2) ? 16'd2 : wdata[15:0];
         R_PINS: begin
           txpin <= wdata[4:0];
