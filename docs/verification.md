@@ -1,0 +1,42 @@
+# Verification
+
+## Approach
+
+1. **The CPU is reused, not re-verified.** Hazard3 is silicon-proven (RP2350) and was verified with riscv-formal by its author. We test the integration: fetch from SRAM, byte/halfword/word accesses through our fabric, register accesses, blocking wait states.
+2. **Protocols are tested end to end with real firmware.** Every test builds a C program with stock GCC, loads it over the host SPI port exactly as the board MCU would, runs it on the RTL, and watches the pins.
+3. **Protocol correctness is judged by independent peer models.** Each model is written from the protocol's specification or a device datasheet, not from our RTL: it decodes what the chip sends, checks timing rules, and answers as a real device or host would. A test passes only if the model is satisfied *and* the firmware reports success.
+4. **Evidence levels.** Each claim says whether it comes from RTL simulation, gate-level simulation, P&R sign-off, or (later) FPGA.
+
+## Test list (RTL simulation, `test/`, `make -C test`)
+
+| Test | Firmware | Independent model / checks |
+|---|---|---|
+| `test_boot` | `memtest`, `blink` | SPI load and read-back; byte/halfword/word stores and loads through the fabric (incl. store-then-load stalls); pin toggling without drift |
+| `test_tgpio` | `timed_gpio` | Every scheduled pin change lands on its exact cycle (incl. changes 1 cycle apart, multi-pin, output-enable); LATE flag; edge capture error 0 cycles; blocking timeout returns after the limit |
+| `test_uart` | `uart_echo` | UART model (`lib/uart.py`): mid-bit decoding plus a check that every edge lies on the bit grid; 1 Mbaud back to back, 115200, 3 Mbaud at 16.67 cycles/bit with the sender 3 % fast; framing-error recovery |
+| `test_spi` | `spi_ram`, `spi_target` | SPI RAM model (23x-style) in modes 0-3 at 1, 5 and 12.5 MHz (F/4 with RX sample delay); protocol checks (SCK idle at CS edges, whole bytes); SPI target driven by a controller model with CS framing and an aborted frame |
+| `test_i2c` | `i2c_eeprom`, `i2c_target` | Open-drain bus model; 24C02-style EEPROM (page write, write cycle with ACK polling, random read with repeated START, clock stretching) that checks setup/hold against SCL; the chip as a target driven by a controller model, which flags any SDA change by the target while SCL is high |
+| `test_usb` | `usb_phy` | USB low-speed line model (`lib/usb.py`): NRZI, stuffing, SYNC, PID check bits, CRC16 residual, EOP length, bit timing; host packet at -1 % rate; hardware handshake within the 2..7.5 bit-time window |
+| `test_usb_hid` | `usb_hid` | A USB host model enumerates the C keyboard (reset, descriptors at address 0 and 5, SET_ADDRESS, SET_CONFIGURATION, SET_IDLE) and reads 4 reports ("Hi"); all 37 answers within the turnaround limit |
+| `test_eth` | `eth_tx` | IEEE 802.3 transmit decoder (`lib/eth.py`): Manchester symbols, differential pair, preamble/SFD, FCS checked with zlib, TP_IDL; run at a 40 MHz clock |
+| `test_ws2812` | `ws2812` | WS2812 datasheet timing model: high-pulse widths and bit periods |
+| `test_onewire` | `onewire` | 1-Wire device model (DS18B20-style ROM): reset/presence, write and read slot timing; CRC-8 checked in C |
+
+All tests also run in GitHub Actions on every push.
+
+## What the models found
+
+Independent models catch mistakes in both the RTL and the test itself. Examples from development:
+
+- RTL: after a UART frame with a low stop bit, the receiver started a phantom frame because it reacted to the line *level*. Fixed: start on an *edge* from idle, and drop a frame whose start bit is gone at mid-bit (glitch filter).
+- RTL design gaps found while writing the I2C and USB tests: an external-clock engine must change data only on the launch edge (otherwise an I2C target would make a false START/STOP); a pre-queued auto-reply must not fire on a packet that ended before it was queued; cancelling a queued answer must not reset the receiver.
+- Test-side bugs (the RTL was right): an I2C controller model that released SDA for START, an EEPROM model that took a repeated START's SCL rise for a data bit, a 1-Wire model that took its own presence release for a reset.
+
+## Gate level and sign-off
+
+- P&R sign-off of the full design: LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners, Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-12)*.
+- Gate-level simulation: the TT flow's GL test (Icarus 13 with the IHP cell and SRAM models) runs in the GDS workflow. *(pending)*
+
+## FPGA
+
+Planned: the same RTL and firmware on a Zynq UltraScale+ board, against real devices. *(pending)*
