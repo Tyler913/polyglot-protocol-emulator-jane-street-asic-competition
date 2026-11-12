@@ -55,7 +55,9 @@
  *                   on average, [8] RESYNC: async RX restarts its bit timer
  *                   on every edge of the RX line; bit-level options (internal
  *                   clock TX, async RX): [10:9] CODE (0 NRZ, 1 NRZI: a 0 bit
- *                   toggles the line), [13:11] STUFF_N (0 off; after N
+ *                   toggles the line, 2 Manchester (TX): first half of a bit
+ *                   is the complement, second half the bit, IEEE 802.3
+ *                   polarity), [13:11] STUFF_N (0 off; after N
  *                   equal bits insert/remove one), [14] STUFF_EQUAL (runs of
  *                   equal bits, CAN; else runs of ones, USB), [15] DIFF (CLK
  *                   pin carries the complement of TX; SE0 on RX = RX and
@@ -69,13 +71,13 @@
  *                   MSB first, after this word), [4] SE0 (both TX lines low
  *                   for this word's bits), [5] AFTER_RX (wait until TURN
  *                   cycles after the end of a received packet, then send)
- *   0x24 CRCCFG RW  [15:0] polynomial (without the top bit), [19:16]
- *                   width-1 (1..16 bits), [20] XOROUT (send the CRC
- *                   complemented), [28:24] RX_SKIP (received bits after a
+ *   0x24 CRCCFG RW  [4:0] width-1 (1..32 bits), [5] XOROUT (send the CRC
+ *                   complemented), [12:8] RX_SKIP (received bits after a
  *                   frame start that are not part of the RX CRC)
- *   0x28 CRCINIT RW [15:0] initial CRC value (TX and RX)
+ *   0x28 CRCINIT RW initial CRC value (TX and RX)
  *   0x2C RXCRC  R   RX CRC register (after the last data bit: the residual)
  *   0x30 TURN   RW  [15:0] turnaround delay for AFTER_RX words, in cycles
+ *   0x34 CRCPOLY RW CRC polynomial without the top bit (e.g. 0x04C11DB7)
  *   0x80 + 4*(n-1)  W  push a word of n bits (n = 1..32), whatever CTRL.LEN
  *
  * Bit timing, internal clock: each bit lasts DIV cycles. The TX line changes
@@ -134,7 +136,7 @@ module pg_wire #(
   localparam [3:0] R_TX = 4'd0, R_RX = 4'd1, R_STATUS = 4'd2, R_CTRL = 4'd3,
                    R_DIV = 4'd4, R_PINS = 4'd5, R_FLUSH = 4'd6, R_CTRL2 = 4'd7,
                    R_TXATTR = 4'd8, R_CRCCFG = 4'd9, R_CRCINIT = 4'd10,
-                   R_RXCRC = 4'd11, R_TURN = 4'd12;
+                   R_RXCRC = 4'd11, R_TURN = 4'd12, R_CRCPOLY = 4'd13;
 
   localparam FW = 43;                     // TX FIFO entry: {attr[5:0], len-1[4:0], data[31:0]}
   wire full = (FULL != 0);
@@ -145,8 +147,9 @@ module pg_wire #(
   reg [27:0] ctrl;
   reg [16:0] ctrl2;
   reg [5:0]  txattr;
-  reg [28:0] crccfg;
-  reg [15:0] crcinit;
+  reg [12:0] crccfg;
+  reg [31:0] crcinit;
+  reg [31:0] poly;
   reg [15:0] turn;
   reg [15:0] div;
   reg [4:0]  txpin, rxpin, ckpin, gtpin;
@@ -174,15 +177,15 @@ module pg_wire #(
   wire [7:0] frac       = ctrl2[7:0];
   wire       resync     = ctrl2[8];
   wire       nrzi       = full && (ctrl2[10:9] == 2'd1);
+  wire       manch      = full && (ctrl2[10:9] == 2'd2);
   wire [2:0] stuff_n    = full ? ctrl2[13:11] : 3'd0;
   wire       stuff_eq   = ctrl2[14];
   wire       diff       = full && ctrl2[15];
   wire       rx_packet  = full && ctrl2[16];
-  wire [15:0] poly      = crccfg[15:0];
-  wire [3:0]  crc_lm1   = crccfg[19:16];
-  wire        crc_xor   = crccfg[20];
-  wire [4:0]  rx_skip   = crccfg[28:24];
-  wire [15:0] crc_mask  = 16'hFFFF >> (4'd15 - crc_lm1);
+  wire [4:0]  crc_lm1   = crccfg[4:0];
+  wire        crc_xor   = crccfg[5];
+  wire [4:0]  rx_skip   = crccfg[12:8];
+  wire [31:0] crc_mask  = 32'hFFFF_FFFF >> (5'd31 - crc_lm1);
 
   wire [15:0] half = {1'b0, div[15:1]};                     // sample point (counting down from DIV-1)
   wire [15:0] qpt  = div - 16'd1 - {2'b00, div[15:2]};      // quarter bit after the start
@@ -196,14 +199,14 @@ module pg_wire #(
   wire srst = rst || !en;
 
   // One bit-serial CRC step (MSB-out LFSR over the transmitted bit order)
-  function [15:0] crc_step;
-    input [15:0] c;
+  function [31:0] crc_step;
+    input [31:0] c;
     input        b;
-    input [3:0]  lm1;
-    input [15:0] p;
-    input [15:0] m;
+    input [4:0]  lm1;
+    input [31:0] p;
+    input [31:0] m;
     begin
-      crc_step = ((c << 1) ^ ((b ^ c[lm1]) ? p : 16'd0)) & m;
+      crc_step = ((c << 1) ^ ((b ^ c[lm1]) ? p : 32'd0)) & m;
     end
   endfunction
 
@@ -293,7 +296,7 @@ module pg_wire #(
   reg [2:0]  srun;       // run length for stuffing
   reg        slast;      // previous transmitted bit (before line coding)
   reg        lvl_prev;   // line level of the previous bit (NRZI)
-  reg [15:0] tcrc;
+  reg [31:0] tcrc;
   reg [15:0] tmr;
   reg        second;     // in the second part of the bit (after the sample point)
   reg        sampled;    // a sample was taken in this bit (ext clock, CLK_WAIT)
@@ -325,9 +328,11 @@ module pg_wire #(
                               : (cur_bit ? srun + 3'd1 : 3'd0);
   wire next_stuff = stuff_on && (run_n == stuff_n);
   wire crc_upd    = full && !stuffing && !a_nocrc && !in_crc;
-  wire [15:0] tcrc_n = crc_step(tcrc, cur_bit, crc_lm1, poly, crc_mask);
-  wire [15:0] tcrc_o = (crc_upd ? tcrc_n : tcrc) ^ (crc_xor ? crc_mask : 16'd0);
-  wire lvl_cur    = a_se0 ? 1'b0 : (nrzi ? (lvl_prev ^ !cur_bit) : cur_bit);
+  wire [31:0] tcrc_n = crc_step(tcrc, cur_bit, crc_lm1, poly, crc_mask);
+  wire [31:0] tcrc_o = (crc_upd ? tcrc_n : tcrc) ^ (crc_xor ? crc_mask : 32'd0);
+  wire lvl_cur    = a_se0 ? 1'b0 :
+                    nrzi  ? (lvl_prev ^ !cur_bit) :
+                    manch ? (cur_bit ^ !second) : cur_bit;
 
   // CLK_WAIT: hold the timer in the second half while the clock pin is low
   wire hold       = clk_wait && second && !ck_in;
@@ -365,7 +370,7 @@ module pg_wire #(
       srun     <= 3'd0;
       slast    <= 1'b1;
       lvl_prev <= 1'b1;
-      tcrc     <= 16'd0;
+      tcrc     <= 32'd0;
       tmr      <= 16'd0;
       second   <= 1'b0;
       sampled  <= 1'b0;
@@ -414,8 +419,8 @@ module pg_wire #(
           end else begin
             stuffing <= 1'b0;
             if (crc_follow) begin            // append the CRC as an MSB-first word
-              tx_sh   <= {16'd0, tcrc_o};
-              tx_len  <= {1'b0, crc_lm1};
+              tx_sh   <= tcrc_o;
+              tx_len  <= crc_lm1;
               tx_msb  <= 1'b1;
               in_crc  <= 1'b1;
               tx_cnt  <= 5'd0;
@@ -509,7 +514,7 @@ module pg_wire #(
   reg [2:0]  rrun;          // run length for destuffing
   reg        rlast;         // previous decoded bit
   reg [4:0]  rbits;         // decoded bits since the frame start (saturating), for RX_SKIP
-  reg [15:0] rcrc;
+  reg [31:0] rcrc;
   wire [8:0] racc_sum = {1'b0, racc} + {1'b0, frac};
   wire [15:0] rbit_m1 = div - 16'd1 + {15'd0, racc_sum[8]};
 
@@ -562,7 +567,7 @@ module pg_wire #(
       rrun    <= 3'd0;
       rlast   <= 1'b1;
       rbits   <= 5'd0;
-      rcrc    <= 16'd0;
+      rcrc    <= 32'd0;
     end else begin
       if (rx_start || (resync && rx_busy && rx_in != rx_prev)) begin
         rx_busy <= 1'b1;             // a start edge, or (RESYNC) any edge: realign the bit timer
@@ -696,10 +701,11 @@ module pg_wire #(
         R_PINS:    rdata = {3'd0, gtpin, 3'd0, ckpin, 3'd0, rxpin, 3'd0, txpin};
         R_CTRL2:   rdata = {15'd0, ctrl2};
         R_TXATTR:  rdata = full ? {26'd0, txattr} : 32'd0;
-        R_CRCCFG:  rdata = full ? {3'd0, crccfg} : 32'd0;
-        R_CRCINIT: rdata = full ? {16'd0, crcinit} : 32'd0;
-        R_RXCRC:   rdata = full ? {16'd0, rcrc} : 32'd0;
+        R_CRCCFG:  rdata = full ? {19'd0, crccfg} : 32'd0;
+        R_CRCINIT: rdata = full ? crcinit : 32'd0;
+        R_RXCRC:   rdata = full ? rcrc : 32'd0;
         R_TURN:    rdata = full ? {16'd0, turn} : 32'd0;
+        R_CRCPOLY: rdata = full ? poly : 32'd0;
         default:   rdata = 32'd0;
       endcase
     end
@@ -712,8 +718,9 @@ module pg_wire #(
       ctrl    <= 28'd0;
       ctrl2   <= 17'd0;
       txattr  <= 6'd0;
-      crccfg  <= 29'd0;
-      crcinit <= 16'd0;
+      crccfg  <= 13'd0;
+      crcinit <= 32'd0;
+      poly    <= 32'd0;
       turn    <= 16'd0;
       div     <= 16'd2;
       txpin   <= 5'd0;
@@ -725,8 +732,9 @@ module pg_wire #(
         R_CTRL:    ctrl    <= wdata[27:0];
         R_CTRL2:   ctrl2   <= wdata[16:0];
         R_TXATTR:  txattr  <= wdata[5:0];
-        R_CRCCFG:  crccfg  <= wdata[28:0];
-        R_CRCINIT: crcinit <= wdata[15:0];
+        R_CRCCFG:  crccfg  <= wdata[12:0];
+        R_CRCINIT: crcinit <= wdata;
+        R_CRCPOLY: poly    <= wdata;
         R_TURN:    turn    <= wdata[15:0];
         R_DIV:     div     <= (wdata[15:0] < 16'd2) ? 16'd2 : wdata[15:0];
         R_PINS: begin

@@ -27,9 +27,9 @@ def build_firmware(name):
     return (SW_DIR / "build" / f"{name}.bin").read_bytes()
 
 
-async def start(dut):
-    """Start the clock and reset the chip. Returns a HostSpi."""
-    cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
+async def start(dut, clk_ns=CLK_NS):
+    """Start the clock (default 50 MHz) and reset the chip. Returns a HostSpi."""
+    cocotb.start_soon(Clock(dut.clk, clk_ns, unit="ns").start())
     dut.ena.value = 1
     ui_pins(dut).reset(1 << 7)  # host CS_N idle high, all other inputs low
     dut.uio_in.value = 0

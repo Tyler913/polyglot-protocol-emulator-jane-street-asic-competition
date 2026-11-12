@@ -206,7 +206,8 @@ typedef struct {
     volatile uint32_t CRCINIT;
     volatile uint32_t RXCRC;
     volatile uint32_t TURN;     /* auto-reply delay after a received packet, cycles */
-    uint32_t _pad[19];
+    volatile uint32_t CRCPOLY;
+    uint32_t _pad[18];
     volatile uint32_t TXN[32];  /* TXN[n-1] = x pushes an n-bit word */
 } pg_wire_t;
 
@@ -246,6 +247,7 @@ typedef struct {
 #define WIRE_FRAC(f)     ((uint32_t)(f) & 0xFFu)   /* bit period = DIV + f/256 cycles */
 #define WIRE_RESYNC      (1u << 8)                 /* async RX realigns on every edge */
 #define WIRE_NRZI        (1u << 9)                 /* line code: a 0 bit toggles the line */
+#define WIRE_MANCHESTER  (2u << 9)                 /* line code (TX): ~bit then bit in each bit time (IEEE 802.3) */
 #define WIRE_STUFF(n)    (((uint32_t)(n) & 7u) << 11)  /* insert/remove a bit after n equal bits */
 #define WIRE_STUFF_EQUAL (1u << 14)                /* runs of equal bits (CAN); default: runs of ones (USB) */
 #define WIRE_DIFF        (1u << 15)                /* CLK pin = complement of TX; SE0 = RX and GATE pins low */
@@ -259,10 +261,13 @@ typedef struct {
 #define WIRE_A_SE0       (1u << 4)                 /* both lines low for this word */
 #define WIRE_A_AFTER_RX  (1u << 5)                 /* start TURN cycles after the next received packet */
 
-/* CRCCFG */
-#define WIRE_CRC(poly, width, xorout, rx_skip) \
-    (((uint32_t)(poly) & 0xFFFFu) | ((((uint32_t)(width) - 1u) & 15u) << 16) | ((xorout) ? 1u << 20 : 0u) | \
-     (((uint32_t)(rx_skip) & 31u) << 24))
+/* CRC unit: width 1..32, polynomial without the top bit; TX appends it MSB first */
+static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t init, int xorout, int rx_skip)
+{
+    w->CRCPOLY = poly;
+    w->CRCINIT = init;
+    w->CRCCFG  = ((uint32_t)(width - 1) & 31u) | (xorout ? 1u << 5 : 0u) | (((uint32_t)rx_skip & 31u) << 8);
+}
 
 /* Bit period for a rate in Hz in 1/256 cycles: DIV = x >> 8, DIV_FRAC = x & 0xFF */
 #define PG_BIT_FIX8(hz)  ((uint32_t)(((uint64_t)PG_F_CPU * 256u + (hz) / 2u) / (hz)))
@@ -519,8 +524,7 @@ static inline void usb_ls_init(pg_wire_t *w, int dm_pin, int dp_pin)
     w->CTRL2   = WIRE_FRAC(PG_BIT_FIX8(1500000)) | WIRE_RESYNC | WIRE_NRZI | WIRE_STUFF(6) |
                  WIRE_DIFF | WIRE_RX_PACKET;
     w->PINS    = WIRE_PINS(dm_pin, dm_pin, dp_pin) | WIRE_GATE_PIN(dp_pin);
-    w->CRCCFG  = WIRE_CRC(0x8005u, 16, 1, 16);      /* CRC16; RX skips SYNC and PID */
-    w->CRCINIT = 0xFFFFu;
+    wire_crc(w, 0x8005u, 16, 0xFFFFu, 1, 16);       /* CRC16; RX skips SYNC and PID */
     w->TURN    = USB_TURN;
     w->TXATTR  = 0;
     w->CTRL    = WIRE_EN | WIRE_TX | WIRE_RX | WIRE_IDLE_HIGH | WIRE_RX_ASYNC | WIRE_OE_FRAME |
@@ -557,6 +561,46 @@ static inline void usb_queue_handshake(pg_wire_t *w, uint8_t pid)
     w->TXATTR = WIRE_A_NOCRC;
     wire_putn(w, 8, pid);
     usb__eop(w);
+}
+
+/* ---- 10BASE-T Ethernet (TX): line layer -------------------------------------
+ * Manchester code, differential TD+ (TX pin) / TD- (CLK pin), and the CRC-32
+ * frame check sequence are done by the engine. Needs a clock that is a
+ * multiple of 20 MHz (build with PG_F_CPU = 40 MHz: 4 cycles per bit).
+ * The frame (destination ... payload, at least 60 bytes) is C data; the
+ * engine adds preamble/SFD (pushed as raw words) and the FCS. Link pulses
+ * (NLP, one 100 ns pulse every 16 ms) can be sent with timed GPIO.
+ */
+
+static inline void eth_init(pg_wire_t *w, int tdp_pin, int tdn_pin)
+{
+    w->CTRL  = 0;
+    w->DIV   = PG_F_CPU / 10000000u;
+    w->CTRL2 = WIRE_MANCHESTER | WIRE_DIFF;
+    w->PINS  = WIRE_PINS(tdp_pin, tdp_pin, tdn_pin) | WIRE_GATE_PIN(tdn_pin);
+    wire_crc(w, 0x04C11DB7u, 32, 0xFFFFFFFFu, 1, 0);
+    w->TXATTR = 0;
+    w->CTRL  = WIRE_EN | WIRE_TX | WIRE_OE_FRAME | WIRE_LEN(32);
+}
+
+static inline void eth_send(pg_wire_t *w, const uint8_t *f, uint32_t n)
+{
+    w->TXATTR = WIRE_A_NOCRC;
+    wire_putn(w, 32, 0x55555555u);                   /* preamble */
+    wire_putn(w, 32, 0xD5555555u);                   /* preamble + SFD */
+    for (uint32_t i = 0; i < n; ) {
+        uint32_t left = n - i;
+        uint32_t attr = (i == 0 ? WIRE_A_CRC_INIT : 0u);
+        if (left >= 4u) {
+            w->TXATTR = attr | (left == 4u ? WIRE_A_CRC_OUT : 0u);
+            wire_putn(w, 32, f[i] | ((uint32_t)f[i + 1] << 8) | ((uint32_t)f[i + 2] << 16) | ((uint32_t)f[i + 3] << 24));
+            i += 4;
+        } else {
+            w->TXATTR = attr | (left == 1u ? WIRE_A_CRC_OUT : 0u);
+            wire_putn(w, 8, f[i]);
+            i += 1;
+        }
+    }
 }
 
 #endif /* POLYGLOT_PROTOCOL_H */
