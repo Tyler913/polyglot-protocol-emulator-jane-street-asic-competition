@@ -1,0 +1,66 @@
+name: test
+on: [push, workflow_dispatch]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install iverilog
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      # Stock RISC-V GCC (xPack) to build the C firmware used by the tests
+      - name: Cache RISC-V GCC
+        id: cache-gcc
+        uses: actions/cache@v4
+        with:
+          path: ~/xpack-riscv-none-elf-gcc-15.2.0-1
+          key: xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64
+
+      - name: Install RISC-V GCC
+        if: steps.cache-gcc.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -sSL https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz | tar xz -C $HOME
+
+      - name: Add RISC-V GCC to PATH
+        shell: bash
+        run: echo "$HOME/xpack-riscv-none-elf-gcc-15.2.0-1/bin" >> $GITHUB_PATH
+
+      # Set Python up and install cocotb
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python packages
+        shell: bash
+        run: pip install -r test/requirements.txt
+
+      - name: Run tests
+        run: |
+          cd test
+          make clean
+          make
+          # make will return success even if the tests fail, so check results.xml for failed tests
+          python -m cocotb_tools.check_results results.xml
+
+      - name: Test Summary
+        uses: test-summary/action@v2.4
+        with:
+          paths: "test/results.xml"
+        if: always()
+
+      - name: upload waveform and test results
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: |
+            test/tb.fst
+            test/results.xml
+            test/output/*
