@@ -64,7 +64,9 @@
  *                   GATE pins both low; RX ignores the line while TX
  *                   sends: half duplex), [16] RX_PACKET (async RX keeps
  *                   receiving word after word until SE0 instead of stopping
- *                   after one word)
+ *                   after one word), [18:17] TAIL_BITS: after the last word
+ *                   the TX line stays driven at the IDLE level for 0..3 more
+ *                   bit times (USB end-of-packet J, 10BASE-T idle)
  *   0x20 TXATTR RW  attributes of the words pushed from now on: [0] NOSTUFF,
  *                   [1] NOCRC (not part of the CRC), [2] CRC_INIT (reset the
  *                   TX CRC before this word), [3] CRC_OUT (send the TX CRC,
@@ -78,6 +80,12 @@
  *   0x2C RXCRC  R   RX CRC register (after the last data bit: the residual)
  *   0x30 TURN   RW  [15:0] turnaround delay for AFTER_RX words, in cycles
  *   0x34 CRCPOLY RW CRC polynomial without the top bit (e.g. 0x04C11DB7)
+ *   0x38 RXMATCH RW auto-reply filter: [7:0] value, [15:8] mask, [19:16]
+ *                   word index k. A received packet triggers AFTER_RX words
+ *                   only if (word k & mask) == (value & mask); mask 0 = any.
+ *
+ * AFTER_RX words wait for the end of a packet received after they were
+ * pushed (pushing one cancels a pending trigger), then TURN cycles.
  *   0x80 + 4*(n-1)  W  push a word of n bits (n = 1..32), whatever CTRL.LEN
  *
  * Bit timing, internal clock: each bit lasts DIV cycles. The TX line changes
@@ -136,7 +144,7 @@ module pg_wire #(
   localparam [3:0] R_TX = 4'd0, R_RX = 4'd1, R_STATUS = 4'd2, R_CTRL = 4'd3,
                    R_DIV = 4'd4, R_PINS = 4'd5, R_FLUSH = 4'd6, R_CTRL2 = 4'd7,
                    R_TXATTR = 4'd8, R_CRCCFG = 4'd9, R_CRCINIT = 4'd10,
-                   R_RXCRC = 4'd11, R_TURN = 4'd12, R_CRCPOLY = 4'd13;
+                   R_RXCRC = 4'd11, R_TURN = 4'd12, R_CRCPOLY = 4'd13, R_RXMATCH = 4'd14;
 
   localparam FW = 43;                     // TX FIFO entry: {attr[5:0], len-1[4:0], data[31:0]}
   wire full = (FULL != 0);
@@ -145,12 +153,13 @@ module pg_wire #(
   // Configuration
   // ---------------------------------------------------------------------
   reg [27:0] ctrl;
-  reg [16:0] ctrl2;
+  reg [18:0] ctrl2;
   reg [5:0]  txattr;
   reg [12:0] crccfg;
   reg [31:0] crcinit;
   reg [31:0] poly;
   reg [15:0] turn;
+  reg [19:0] rxmatch;
   reg [15:0] div;
   reg [4:0]  txpin, rxpin, ckpin, gtpin;
 
@@ -182,6 +191,7 @@ module pg_wire #(
   wire       stuff_eq   = ctrl2[14];
   wire       diff       = full && ctrl2[15];
   wire       rx_packet  = full && ctrl2[16];
+  wire [1:0] tail_bits  = full ? ctrl2[18:17] : 2'd0;
   wire [4:0]  crc_lm1   = crccfg[4:0];
   wire        crc_xor   = crccfg[5];
   wire [4:0]  rx_skip   = crccfg[12:8];
@@ -279,6 +289,8 @@ module pg_wire #(
   // ---------------------------------------------------------------------
   wire        rx_pkt_end;
   wire        rx_start;
+  reg         match_ok;      // the packet being received passes RXMATCH
+  wire        push_after = txf_push && full && txattr[5];
   reg  [15:0] turn_cnt;
   reg         turn_run, turn_go;
 
@@ -304,6 +316,7 @@ module pg_wire #(
   reg        boundary;   // ext clock: a word ended; the next one waits for a launch edge
   reg        stretching;
   reg  [7:0] tacc;       // fractional bit period accumulator (TX timer)
+  reg  [1:0] itail;      // TAIL_BITS still to drive at the idle level
 
   // Next bit length: DIV, plus one cycle when the accumulator overflows
   wire [8:0] tacc_sum = {1'b0, tacc} + {1'b0, frac};
@@ -351,9 +364,10 @@ module pg_wire #(
   assign txf_pop = tx_load;
 
   wire late_phase = tx_late && !clk_ext && tx_busy && !second && (tmr > qpt);
+  wire itail_on   = (itail != 2'd0);
   wire line       = (tx_busy && late_phase) ? prev_bit :
                     tx_busy                 ? lvl_cur  :
-                    tail                    ? data_bit : idle;
+                    tail                    ? data_bit : idle;   // itail: idle level
   wire se0_now    = tx_busy && a_se0;
 
   always @(posedge clk) begin
@@ -376,6 +390,7 @@ module pg_wire #(
       sampled  <= 1'b0;
       prev_bit <= 1'b1;
       tacc     <= 8'd0;
+      itail    <= 2'd0;
     end else begin
       if (tx_load) begin
         if (tx_busy) begin                   // continuing a packet: account for the bit just sent
@@ -391,6 +406,7 @@ module pg_wire #(
         if (h_crcinit) tcrc <= crcinit;
         tx_busy  <= 1'b1;
         tail     <= 1'b0;
+        itail    <= 2'd0;
         tx_sh    <= txf_dout[31:0];
         tx_len   <= txf_dout[36:32];
         tx_attr  <= txf_dout[42:37];
@@ -427,6 +443,7 @@ module pg_wire #(
             end else if (tx_last) begin
               tx_busy <= 1'b0;
               tail    <= tx_late;
+              itail   <= tail_bits;
             end else begin
               tx_cnt  <= tx_cnt + 5'd1;
             end
@@ -448,6 +465,14 @@ module pg_wire #(
         end else if (ext_launch && sampled) begin
           sampled <= 1'b0;
           tx_cnt  <= tx_cnt + 5'd1;
+        end
+      end else if (itail_on && !clk_ext) begin   // driven idle bits after the last word
+        if (tmr == 16'd0) begin
+          tmr   <= tbit_m1;
+          tacc  <= tacc_sum[7:0];
+          itail <= itail - 2'd1;
+        end else begin
+          tmr   <= tmr - 16'd1;
         end
       end else if (tail) begin
         if (clk_ext) begin
@@ -484,7 +509,7 @@ module pg_wire #(
       turn_run <= 1'b0;
       turn_go  <= 1'b0;
     end else begin
-      if (rx_pkt_end) begin
+      if (rx_pkt_end && match_ok) begin
         turn_run <= 1'b1;
         turn_cnt <= 16'd0;
         turn_go  <= 1'b0;
@@ -496,7 +521,8 @@ module pg_wire #(
           turn_cnt <= turn_cnt + 16'd1;
         end
       end
-      if (rx_start || (tx_load && h_after)) turn_go <= 1'b0;
+      if (rx_start || (tx_load && h_after) || push_after) turn_go <= 1'b0;
+      if (push_after) turn_run <= 1'b0;
     end
   end
 
@@ -514,6 +540,7 @@ module pg_wire #(
   reg [2:0]  rrun;          // run length for destuffing
   reg        rlast;         // previous decoded bit
   reg [4:0]  rbits;         // decoded bits since the frame start (saturating), for RX_SKIP
+  reg [3:0]  rwidx;         // words completed in this packet (saturating), for RXMATCH
   reg [31:0] rcrc;
   wire [8:0] racc_sum = {1'b0, racc} + {1'b0, frac};
   wire [15:0] rbit_m1 = div - 16'd1 + {15'd0, racc_sum[8]};
@@ -568,6 +595,8 @@ module pg_wire #(
       rlast   <= 1'b1;
       rbits   <= 5'd0;
       rcrc    <= 32'd0;
+      rwidx   <= 4'd0;
+      match_ok <= 1'b1;
     end else begin
       if (rx_start || (resync && rx_busy && rx_in != rx_prev)) begin
         rx_busy <= 1'b1;             // a start edge, or (RESYNC) any edge: realign the bit timer
@@ -578,6 +607,8 @@ module pg_wire #(
           rrun  <= 3'd0;
           rlast <= idle;
           rbits <= 5'd0;
+          rwidx <= 4'd0;
+          match_ok <= (rxmatch[15:8] == 8'd0);
           rcrc  <= crcinit;
           rx_sh <= 32'd0;
           rx_cnt <= 5'd0;
@@ -616,6 +647,9 @@ module pg_wire #(
             rx_sh   <= 32'd0;
             rx_cnt  <= 5'd0;
             if (!rx_packet) rx_busy <= 1'b0;
+            if (rwidx != 4'd15) rwidx <= rwidx + 4'd1;
+            if (rwidx == rxmatch[19:16] && rxmatch[15:8] != 8'd0)
+              match_ok <= ((rx_word[7:0] ^ rxmatch[7:0]) & rxmatch[15:8]) == 8'd0;
           end else begin
             rx_sh   <= rx_word;
             rx_cnt  <= rx_cnt + 5'd1;
@@ -655,7 +689,7 @@ module pg_wire #(
   assign tx_val = od ? 1'b0 : drv_line;
   assign tx_oe  = arb_off ? 1'b0 :
                   (oe_mode == 2'd0) ? 1'b1 :
-                  (oe_mode == 2'd1) ? (gated ? active : (tx_busy || tail)) :
+                  (oe_mode == 2'd1) ? (gated ? active : (tx_busy || tail || itail_on)) :
                   od                ? !drv_line : 1'b0;
 
   wire sck = tx_busy ? ((cpol ^ cpha) ^ second) : cpol;
@@ -670,7 +704,7 @@ module pg_wire #(
   // ---------------------------------------------------------------------
   // Registers
   // ---------------------------------------------------------------------
-  wire tx_active = tx_busy || (tail && !clk_ext) || !txf_empty;
+  wire tx_active = tx_busy || (tail && !clk_ext) || itail_on || !txf_empty;
 
   always @(*) begin
     ready = 1'b1;
@@ -699,13 +733,14 @@ module pg_wire #(
         R_CTRL:    rdata = {4'd0, ctrl};
         R_DIV:     rdata = {16'd0, div};
         R_PINS:    rdata = {3'd0, gtpin, 3'd0, ckpin, 3'd0, rxpin, 3'd0, txpin};
-        R_CTRL2:   rdata = {15'd0, ctrl2};
+        R_CTRL2:   rdata = {13'd0, ctrl2};
         R_TXATTR:  rdata = full ? {26'd0, txattr} : 32'd0;
         R_CRCCFG:  rdata = full ? {19'd0, crccfg} : 32'd0;
         R_CRCINIT: rdata = full ? crcinit : 32'd0;
         R_RXCRC:   rdata = full ? rcrc : 32'd0;
         R_TURN:    rdata = full ? {16'd0, turn} : 32'd0;
         R_CRCPOLY: rdata = full ? poly : 32'd0;
+        R_RXMATCH: rdata = full ? {12'd0, rxmatch} : 32'd0;
         default:   rdata = 32'd0;
       endcase
     end
@@ -716,11 +751,12 @@ module pg_wire #(
   always @(posedge clk) begin
     if (rst) begin
       ctrl    <= 28'd0;
-      ctrl2   <= 17'd0;
+      ctrl2   <= 19'd0;
       txattr  <= 6'd0;
       crccfg  <= 13'd0;
       crcinit <= 32'd0;
       poly    <= 32'd0;
+      rxmatch <= 20'd0;
       turn    <= 16'd0;
       div     <= 16'd2;
       txpin   <= 5'd0;
@@ -730,11 +766,12 @@ module pg_wire #(
     end else if (cfg_wr) begin
       case (ra)
         R_CTRL:    ctrl    <= wdata[27:0];
-        R_CTRL2:   ctrl2   <= wdata[16:0];
+        R_CTRL2:   ctrl2   <= wdata[18:0];
         R_TXATTR:  txattr  <= wdata[5:0];
         R_CRCCFG:  crccfg  <= wdata[12:0];
         R_CRCINIT: crcinit <= wdata;
         R_CRCPOLY: poly    <= wdata;
+        R_RXMATCH: rxmatch <= wdata[19:0];
         R_TURN:    turn    <= wdata[15:0];
         R_DIV:     div     <= (wdata[15:0] < 16'd2) ? 16'd2 : wdata[15:0];
         R_PINS: begin

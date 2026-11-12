@@ -207,7 +207,8 @@ typedef struct {
     volatile uint32_t RXCRC;
     volatile uint32_t TURN;     /* auto-reply delay after a received packet, cycles */
     volatile uint32_t CRCPOLY;
-    uint32_t _pad[18];
+    volatile uint32_t RXMATCH;  /* auto-reply only for packets whose word k matches */
+    uint32_t _pad[17];
     volatile uint32_t TXN[32];  /* TXN[n-1] = x pushes an n-bit word */
 } pg_wire_t;
 
@@ -252,6 +253,7 @@ typedef struct {
 #define WIRE_STUFF_EQUAL (1u << 14)                /* runs of equal bits (CAN); default: runs of ones (USB) */
 #define WIRE_DIFF        (1u << 15)                /* CLK pin = complement of TX; SE0 = RX and GATE pins low */
 #define WIRE_RX_PACKET   (1u << 16)                /* async RX continues word after word until SE0 */
+#define WIRE_TAIL(n)     (((uint32_t)(n) & 3u) << 17)  /* drive n idle bits after the last word */
 
 /* TXATTR bits (apply to the words pushed after the write) */
 #define WIRE_A_NOSTUFF   (1u << 0)
@@ -260,6 +262,9 @@ typedef struct {
 #define WIRE_A_CRC_OUT   (1u << 3)                 /* append the CRC after this word */
 #define WIRE_A_SE0       (1u << 4)                 /* both lines low for this word */
 #define WIRE_A_AFTER_RX  (1u << 5)                 /* start TURN cycles after the next received packet */
+
+/* RXMATCH: only packets whose word k satisfies (word & mask) == value trigger AFTER_RX words */
+#define WIRE_MATCH(k, value, mask) ((((uint32_t)(k) & 15u) << 16) | (((uint32_t)(mask) & 0xFFu) << 8) | ((uint32_t)(value) & 0xFFu))
 
 /* CRC unit: width 1..32, polynomial without the top bit; TX appends it MSB first */
 static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t init, int xorout, int rx_skip)
@@ -522,7 +527,7 @@ static inline void usb_ls_init(pg_wire_t *w, int dm_pin, int dp_pin)
     w->CTRL    = 0;
     w->DIV     = PG_BIT_FIX8(1500000) >> 8;
     w->CTRL2   = WIRE_FRAC(PG_BIT_FIX8(1500000)) | WIRE_RESYNC | WIRE_NRZI | WIRE_STUFF(6) |
-                 WIRE_DIFF | WIRE_RX_PACKET;
+                 WIRE_DIFF | WIRE_RX_PACKET | WIRE_TAIL(1);      /* EOP: SE0 SE0, then J driven by TAIL */
     w->PINS    = WIRE_PINS(dm_pin, dm_pin, dp_pin) | WIRE_GATE_PIN(dp_pin);
     wire_crc(w, 0x8005u, 16, 0xFFFFu, 1, 16);       /* CRC16; RX skips SYNC and PID */
     w->TURN    = USB_TURN;
@@ -534,9 +539,7 @@ static inline void usb_ls_init(pg_wire_t *w, int dm_pin, int dp_pin)
 static inline void usb__eop(pg_wire_t *w)
 {
     w->TXATTR = WIRE_A_SE0 | WIRE_A_NOSTUFF | WIRE_A_NOCRC;
-    wire_putn(w, 2, 0);                              /* SE0 for two bit times */
-    w->TXATTR = WIRE_A_NOSTUFF | WIRE_A_NOCRC;
-    wire_putn(w, 1, 1);                              /* then J */
+    wire_putn(w, 2, 0);                              /* SE0 for two bit times, then J (TAIL_BITS) */
 }
 
 /* DATA0/DATA1 packet; the engine appends CRC16. after_rx: wait for a received packet first. */
@@ -576,11 +579,11 @@ static inline void eth_init(pg_wire_t *w, int tdp_pin, int tdn_pin)
 {
     w->CTRL  = 0;
     w->DIV   = PG_F_CPU / 10000000u;
-    w->CTRL2 = WIRE_MANCHESTER | WIRE_DIFF;
+    w->CTRL2 = WIRE_MANCHESTER | WIRE_DIFF | WIRE_TAIL(2);   /* TP_IDL: TD+ high after the frame */
     w->PINS  = WIRE_PINS(tdp_pin, tdp_pin, tdn_pin) | WIRE_GATE_PIN(tdn_pin);
     wire_crc(w, 0x04C11DB7u, 32, 0xFFFFFFFFu, 1, 0);
     w->TXATTR = 0;
-    w->CTRL  = WIRE_EN | WIRE_TX | WIRE_OE_FRAME | WIRE_LEN(32);
+    w->CTRL  = WIRE_EN | WIRE_TX | WIRE_OE_FRAME | WIRE_IDLE_HIGH | WIRE_LEN(32);
 }
 
 static inline void eth_send(pg_wire_t *w, const uint8_t *f, uint32_t n)

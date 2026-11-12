@@ -3,7 +3,8 @@
 """Independent 10BASE-T transmit decoder, written from IEEE 802.3 clause 14
 (Manchester: in each 100 ns bit the first half is the complement of the bit
 and the second half the bit; differential TD+/TD-) and clause 3 (preamble,
-SFD 0xD5, FCS = CRC-32, checked with zlib), not from the RTL.
+SFD 0xD5, FCS = CRC-32, checked with zlib), not from the RTL. After the
+last bit the transmitter holds TD+ high (TP_IDL) for tail_bits bit times.
 """
 
 import zlib
@@ -13,8 +14,9 @@ from cocotb.triggers import FallingEdge
 
 
 class EthTxMonitor:
-    def __init__(self, dut, tdp, tdn, half):
+    def __init__(self, dut, tdp, tdn, half, tail_bits=0):
         self.dut, self.tdp, self.tdn, self.half = dut, tdp, tdn, half
+        self.tail = tail_bits * 2 * half
         self.frames = []  # (bytes incl. FCS, fcs_ok)
         self.errors = []
         self._levels = []
@@ -45,6 +47,10 @@ class EthTxMonitor:
 
     def _decode(self, lv):
         h = self.half
+        if self.tail:
+            if lv[-self.tail:] != [1] * self.tail:
+                self.errors.append("no TP_IDL (TD+ high) after the frame")
+            lv = lv[: -self.tail]
         if len(lv) % (2 * h):
             self.errors.append(f"burst of {len(lv)} cycles is not a whole number of bits")
         bits = []

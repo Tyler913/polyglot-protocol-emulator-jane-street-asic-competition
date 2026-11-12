@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """10BASE-T transmit from a Wire Engine (sw/tests/eth_tx) at a 40 MHz clock,
 judged by an independent IEEE 802.3 decoder (test/lib/eth.py): Manchester
-symbols, differential pair, preamble/SFD, and the CRC-32 FCS (zlib)."""
+symbols, differential pair, preamble/SFD, the CRC-32 FCS (zlib) and the
+TP_IDL tail."""
 
 import cocotb
 
@@ -16,7 +17,7 @@ FRAME = (bytes.fromhex("ffffffffffff020000000001") + b"\x88\xb5"
 @cocotb.test()
 async def test_eth_10baset_tx(dut):
     host = await start(dut, clk_ns=25)  # 40 MHz
-    mon = EthTxMonitor(dut, tdp=6, tdn=7, half=2)
+    mon = EthTxMonitor(dut, tdp=6, tdn=7, half=2, tail_bits=2)
     mon.start()
     await load(host, "eth_tx")
     await host.ctrl(0x01)
