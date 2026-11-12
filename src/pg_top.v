@@ -14,13 +14,14 @@
  *   ui[6]     HOST_MOSI
  *   ui[7]     HOST_CS_N
  *   uo[5:0]   protocol outputs (pins 8..13)
- *   uo[6]     HOST_IRQ (reserved, 0)
+ *   uo[6]     HOST_IRQ (set by firmware)
  *   uo[7]     HOST_MISO
  *   uio[7:0]  bidirectional protocol pins (pins 0..7)
  *
  * CPU memory map
  *   0x0000_0000 - 0x0000_0FFF  SRAM, 4 KB (code + data)
- *   0x8000_0000 - 0x8000_00FF  system registers (pg_sysio)
+ *   0x8000_0000 - 0x8000_00FF  system registers, timed GPIO (pg_sysio, pg_io)
+ *   0x8000_0100 + 0x100*n      Wire Engine n (pg_wire)
  *
  * Host CTRL register (SPI command 0x03)
  *   bit 0  RUN: 1 releases the CPU from reset
@@ -162,13 +163,13 @@ module tt_um_tyler913_polyglot (
   );
 
   // ---------------------------------------------------------------------
-  // Bus fabric, SRAM, system registers
+  // Bus fabric, SRAM, I/O (system registers, timed GPIO, wire engines)
   // ---------------------------------------------------------------------
   wire        sram_en, sram_we;
   wire [9:0]  sram_addr;
   wire [31:0] sram_wdata, sram_wmask, sram_rdata;
   wire        reg_valid, reg_write, reg_ready;
-  wire [7:0]  reg_addr;
+  wire [11:0] reg_addr;
   wire [31:0] reg_wdata, reg_rdata;
 
   pg_ahb u_ahb (
@@ -213,8 +214,9 @@ module tt_um_tyler913_polyglot (
   );
 
   wire [5:0] proto_uo;
+  wire       host_irq;
 
-  pg_sysio u_sysio (
+  pg_io #(.NUM_WIRES(2)) u_io (
       .clk    (clk),
       .rst    (~cpu_run),
       .valid  (reg_valid),
@@ -226,11 +228,12 @@ module tt_um_tyler913_polyglot (
       .uio_out(uio_out),
       .uio_oe (uio_oe),
       .uo_out (proto_uo),
+      .host_irq(host_irq),
       .uio_in (uio_in),
       .ui_in  (ui_in[4:0])
   );
 
-  assign uo_out = {host_miso, 1'b0, proto_uo};
+  assign uo_out = {host_miso, host_irq, proto_uo};
 
   wire _unused = &{1'b0, ena, host_ctrl[7:1]};
 

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Linker script: one 4 KB SRAM holds code, data, bss and the stack.
+ * The last 256 bytes (0x0F00-0x0FFF) are shared with the host (PG_SHARED in
+ * protocol.h); the stack grows down from 0x0F00.
  */
 
 OUTPUT_ARCH(riscv)
@@ -35,7 +37,8 @@ SECTIONS
         __bss_end = .;
     } > RAM
 
-    __stack_top = ORIGIN(RAM) + LENGTH(RAM);
+    __stack_top = ORIGIN(RAM) + LENGTH(RAM) - 256;
+    ASSERT(__bss_end <= __stack_top - 256, "program too large: less than 256 bytes left for the stack")
 
     /DISCARD/ : { *(.comment) *(.riscv.attributes) }
 }

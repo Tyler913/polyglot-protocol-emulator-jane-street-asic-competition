@@ -3,36 +3,15 @@
 """Bring-up test (gate G1): a C program built with stock GCC is loaded over
 SPI, read back, started, and observed toggling a pin."""
 
-import os
-import subprocess
-from pathlib import Path
-
 import cocotb
-from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge
 
 from lib.host import HostSpi
-
-SW_DIR = Path(__file__).resolve().parent.parent / "sw"
-CLK_NS = 20  # 50 MHz
-
-
-def build_firmware(name):
-    """Build sw/examples/<name> unless FIRMWARE_PREBUILT is set; return the image bytes."""
-    if not os.environ.get("FIRMWARE_PREBUILT"):
-        subprocess.run(["make", "-C", str(SW_DIR), f"build/{name}.bin"], check=True)
-    return (SW_DIR / "build" / f"{name}.bin").read_bytes()
+from lib.soc import build_firmware, start
 
 
 async def reset(dut):
-    cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
-    dut.ena.value = 1
-    dut.ui_in.value = 1 << 7  # CS_N idle high
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
-    dut.rst_n.value = 1
-    await ClockCycles(dut.clk, 5)
+    await start(dut)
 
 
 @cocotb.test()

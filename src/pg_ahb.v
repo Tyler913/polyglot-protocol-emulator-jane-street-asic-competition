@@ -4,8 +4,8 @@
  *
  * pg_ahb: AHB-Lite slave fabric between the Hazard3 bus and
  *   - the SRAM (haddr[31] == 0), zero wait states for reads,
- *   - the register port (haddr[31] == 1), word access only, in the data
- *     phase; the register slave may insert wait states with reg_ready = 0
+ *   - the register port (haddr[31] == 1, 4 KB window), word access only, in
+ *     the data phase; the register slave may insert wait states with reg_ready = 0
  *     (this is how blocking FIFO reads stall the CPU),
  *   - the host SPI loader, which owns the SRAM while the CPU is halted and
  *     otherwise only uses cycles in which the CPU leaves the SRAM idle.
@@ -42,7 +42,7 @@ module pg_ahb (
     // Register port (data phase)
     output wire        reg_valid,
     output wire        reg_write,
-    output wire [7:0]  reg_addr,
+    output wire [11:0] reg_addr,
     output wire [31:0] reg_wdata,
     input  wire [31:0] reg_rdata,
     input  wire        reg_ready,
@@ -169,7 +169,7 @@ module pg_ahb (
   // ---------------------------------------------------------------------
   assign reg_valid = dp_io;
   assign reg_write = dp_write;
-  assign reg_addr  = dp_addr[7:0];
+  assign reg_addr  = dp_addr[11:0];
   assign reg_wdata = hwdata;
 
   assign hrdata = dp_io ? reg_rdata : sram_rdata;

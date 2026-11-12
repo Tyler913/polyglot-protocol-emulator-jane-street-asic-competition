@@ -1,5 +1,5 @@
-# Build all example programs with a stock RISC-V GCC.
-#   make            -> build/<example>.elf / .bin / .lst
+# Build all example and test programs with a stock RISC-V GCC.
+#   make            -> build/<name>.elf / .bin / .lst for examples/<name> and tests/<name>
 #   make CROSS=...  -> use another toolchain prefix
 #
 # Default toolchain: xPack riscv-none-elf-gcc (any GCC with rv32ec/ilp32e multilib works).
@@ -15,14 +15,21 @@ CFLAGS  := $(ARCH) -Os -g -ffreestanding -fno-builtin -Wall -Wextra -Iinclude --
 LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,--gc-sections -Wl,--no-warn-rwx-segments -T rt/link.ld
 
 BUILD    := build
-EXAMPLES := $(notdir $(wildcard examples/*))
+PROGRAMS := $(notdir $(wildcard examples/* tests/*))
 
-all: $(foreach e,$(EXAMPLES),$(BUILD)/$(e).bin $(BUILD)/$(e).lst)
+all: $(foreach e,$(PROGRAMS),$(BUILD)/$(e).bin $(BUILD)/$(e).lst)
 
-$(BUILD)/%.elf: examples/%/main.c rt/crt0.S rt/link.ld include/protocol.h
+define LINK
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections $(LDFLAGS) rt/crt0.S $< -lgcc -o $@
 	$(SIZE) $@
+endef
+
+$(BUILD)/%.elf: examples/%/main.c rt/crt0.S rt/link.ld include/protocol.h
+	$(LINK)
+
+$(BUILD)/%.elf: tests/%/main.c rt/crt0.S rt/link.ld include/protocol.h
+	$(LINK)
 
 $(BUILD)/%.bin: $(BUILD)/%.elf
 	$(OBJCOPY) -O binary $< $@

@@ -7,6 +7,8 @@ Pins: ui[5] = SCK, ui[6] = MOSI, ui[7] = CS_N, uo[7] = MISO. SPI mode 0, MSB fir
 
 from cocotb.triggers import ClockCycles
 
+from .pins import ui_pins
+
 CMD_WRITE = 0x01
 CMD_READ = 0x02
 CMD_CTRL = 0x03
@@ -22,15 +24,11 @@ class HostSpi:
     def __init__(self, dut, half_period=4):
         self.dut = dut
         self.half = half_period
-        self._ui = 0
+        self.ui = ui_pins(dut)
         self._set(CS_N, 1)
 
     def _set(self, bit, v):
-        if v:
-            self._ui |= 1 << bit
-        else:
-            self._ui &= ~(1 << bit)
-        self.dut.ui_in.value = self._ui
+        self.ui.set(bit, v)
 
     async def _xfer(self, data):
         """Clock bytes out on MOSI; return the bytes seen on MISO."""

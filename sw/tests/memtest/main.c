@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * memtest: exercise byte, halfword and word stores and loads (including
- * store-then-load back to back) and report the result at RESULT_ADDR.
- * Used by test/test_boot.py. The host halts the CPU and reads RESULT_ADDR.
+ * store-then-load back to back) and report the result in PG_SHARED (0x0F00).
+ * Used by test/test_boot.py. The host halts the CPU and reads PG_SHARED.
  */
 
 #include "protocol.h"
 
-#define RESULT_ADDR 0x00000F00u
-#define RESULT ((volatile uint32_t *)RESULT_ADDR)
+#define RESULT PG_SHARED
 
 static uint8_t buf[64];
 
