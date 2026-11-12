@@ -114,25 +114,31 @@ class SpiRam:
 
 
 class SpiController:
-    def __init__(self, dut, mode, sck_ui, mosi_ui, miso_uo, half=16):
+    def __init__(self, dut, mode, sck_ui, mosi_ui, miso_uo, cs_ui=None, half=16):
         self.dut = dut
         self.cpol = (mode >> 1) & 1
         self.cpha = mode & 1
-        self.sck_ui, self.mosi_ui, self.miso_uo = sck_ui, mosi_ui, miso_uo
+        self.sck_ui, self.mosi_ui, self.miso_uo, self.cs_ui = sck_ui, mosi_ui, miso_uo, cs_ui
         self.half = half
         self.ui = ui_pins(dut)
         self.ui.set(sck_ui, self.cpol)
         self.ui.set(mosi_ui, 0)
+        if cs_ui is not None:
+            self.ui.set(cs_ui, 1)
 
     def _miso(self):
         return (int(self.dut.uo_out.value) >> self.miso_uo) & 1
 
-    async def xfer(self, data, gap=0):
+    async def select(self, v):
+        self.ui.set(self.cs_ui, 0 if v else 1)
+        await ClockCycles(self.dut.clk, self.half)
+
+    async def xfer(self, data, gap=0, bits=8):
         rx = []
         clk = self.dut.clk
         for b in data:
             r = 0
-            for i in range(7, -1, -1):
+            for i in range(bits - 1, -1, -1):
                 bit = (b >> i) & 1
                 if self.cpha == 0:
                     self.ui.set(self.mosi_ui, bit)

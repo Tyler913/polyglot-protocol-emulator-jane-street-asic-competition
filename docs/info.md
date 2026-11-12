@@ -13,9 +13,9 @@ Polyglot is a protocol emulator that you program in plain C. A Hazard3 RISC-V co
 Two kinds of hardware give the C program exact timing:
 
 - **Timed GPIO**: `pin_out_at(pin, value, t)` queues a pin change that the hardware applies in exactly clock cycle `t`, however long the C code took to get there. Input edges can be timestamped the same way. Any protocol can be bit-banged with cycle-exact edges.
-- **Wire Engines** (2 in this version): protocol-agnostic serial engines with a shift register, an internal or external bit clock, TX/RX FIFOs and output-enable control. Reading an empty RX FIFO or writing a full TX FIFO simply stalls the CPU until the engine is ready. UART and SPI (controller and target) are a few lines of parameters in `protocol.h`, not hardware blocks.
+- **Wire Engines** (2 in this version): protocol-agnostic serial engines with a shift register, an internal or external bit clock, TX/RX FIFOs with per-word length, output-enable and open-drain control, clock stretching in both directions, chip-select or START/STOP framing with frame events, and arbitration detect. Reading an empty RX FIFO or writing a full TX FIFO simply stalls the CPU until the engine is ready. UART, SPI and I2C (controller and target for each) are a few lines of parameters and C in `protocol.h`, not hardware blocks.
 
-Status (W2): CPU, SRAM, host loader, timed GPIO, edge capture and Wire Engine v1 pass RTL simulation with C firmware, judged by independent UART and SPI peer models.
+Status (W3): CPU, SRAM, host loader, timed GPIO, edge capture and Wire Engine v2 pass RTL simulation with C firmware for UART, SPI and I2C in both roles, judged by independent peer models.
 
 ### Host interface (SPI target, mode 0, SCK <= clk/8)
 
@@ -45,6 +45,8 @@ Load a program while RUN = 0, then set RUN = 1. The program starts at address 0.
 UART echo: load `sw/build/uart_echo.bin` and connect a 115200 baud 8N1 serial adapter to uo[1] (chip TX) and ui[0] (chip RX). The chip prints `Polyglot` and echoes what you type in upper case.
 
 SPI: `sw/build/spi_ram.bin` drives SCK on uo[2], MOSI on uo[3], CS_N on uo[4] and reads MISO on ui[1] (for a 23x-style SPI RAM with 8-bit addresses).
+
+I2C (pull-ups needed): `sw/build/i2c_eeprom.bin` talks to a 24C02 EEPROM on SDA uio[0] / SCL uio[1]; `sw/build/i2c_target.bin` makes the chip an I2C target at address 0x42 (16 registers) on SDA uio[2] / SCL uio[3].
 
 ## External hardware
 

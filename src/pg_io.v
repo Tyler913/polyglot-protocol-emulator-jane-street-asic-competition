@@ -15,8 +15,9 @@
  * If it waits longer than BLK_TIMEOUT cycles it completes without effect:
  * writes are dropped, reads return 0xFFFF_FFFF, and BLK_FLAGS[0] is set.
  *
- * Pinmux: an enabled engine owns its TX pin and (with CLK_OUT) its CLK pin;
- * engine 0 has the highest priority. Pins not owned by an engine follow
+ * Pinmux: an enabled engine owns its TX pin and its CLK pin while it drives
+ * it (CLK_OUT, or holding an external clock low); engine 0 has the highest
+ * priority. Pins not owned by an engine follow
  * GPIO_OUT / GPIO_OE.
  */
 
@@ -86,7 +87,7 @@ module pg_io #(
   wire [32*NUM_WIRES-1:0] w_rdata;
   wire [NUM_WIRES-1:0]    w_ready, w_sel;
   wire [5*NUM_WIRES-1:0]  w_tx_pin, w_clk_pin;
-  wire [NUM_WIRES-1:0]    w_tx_on, w_tx_val, w_tx_oe, w_clk_on, w_clk_val;
+  wire [NUM_WIRES-1:0]    w_tx_on, w_tx_val, w_tx_oe, w_clk_on, w_clk_val, w_clk_oe;
 
   genvar g;
   generate
@@ -108,7 +109,8 @@ module pg_io #(
           .tx_oe  (w_tx_oe[g]),
           .clk_pin(w_clk_pin[5*g +: 5]),
           .clk_on (w_clk_on[g]),
-          .clk_val(w_clk_val[g])
+          .clk_val(w_clk_val[g]),
+          .clk_oe (w_clk_oe[g])
       );
     end
   endgenerate
@@ -167,7 +169,7 @@ module pg_io #(
       for (p = 0; p < 14; p = p + 1) begin
         if (w_clk_on[e] && w_clk_pin[5*e +: 5] == p[4:0]) begin
           p_out[p] = w_clk_val[e];
-          p_oe[p]  = 1'b1;
+          p_oe[p]  = w_clk_oe[e];
         end
         if (w_tx_on[e] && w_tx_pin[5*e +: 5] == p[4:0]) begin
           p_out[p] = w_tx_val[e];

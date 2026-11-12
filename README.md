@@ -4,7 +4,7 @@ An entry for the [Jane Street protocol emulator ASIC competition](https://blog.j
 
 A small RISC-V core runs ordinary C compiled with stock GCC or Clang. Protocol-agnostic, timed *wire engines* move bits on exact clock cycles. One header, `protocol.h`, is the whole toolchain. There is no custom assembler and no custom compiler.
 
-**Status:** W2. The CPU, SRAM, host SPI loader, timed GPIO (cycle-exact edges from C), edge capture and Wire Engine v1 pass RTL simulation. UART and SPI (controller and target) are built from the engines in a few lines of C and checked against independent peer models.
+**Status:** W3. The CPU, SRAM, host SPI loader, timed GPIO (cycle-exact edges from C), edge capture and Wire Engine v2 pass RTL simulation. UART, SPI and I2C, each in both roles, are built from the engines in a few lines of C and checked against independent peer models.
 
 ## Layout
 
@@ -14,6 +14,7 @@ A small RISC-V core runs ordinary C compiled with stock GCC or Clang. Protocol-a
 | `sw/` | `protocol.h`, startup code, linker script, example programs (`examples/`) and test programs (`tests/`) |
 | `test/` | cocotb tests (they build the firmware and run it on the RTL) |
 | `docs/info.md` | Tiny Tapeout datasheet |
+| `librelane_plugin_polyglot.py`, `flow/` | LibreLane step that powers the SRAM macro (Metal4 stripes on its supply columns) |
 
 ## Build and test
 
@@ -28,4 +29,5 @@ make -C test                     # RTL simulation with Icarus Verilog + cocotb
 
 - CPU: [Hazard3](https://github.com/Wren6991/Hazard3), Luke Wren, Apache-2.0.
 - SRAM: IHP `RM_IHPSG13_1P_1024x32_c2_bm_bist` macro from the IHP Open PDK.
+- SRAM power-grid approach (stripes on the macro's Metal4 supply columns) after Ken Pettit's [IHP SRAM walkthrough](https://kdp1965.github.io/ihp-um-janestreet-prism/ihp_sram_macro.html); our step is written from scratch.
 - Project template: [Tiny Tapeout IHP Verilog template](https://github.com/TinyTapeout/ttihp-verilog-template).

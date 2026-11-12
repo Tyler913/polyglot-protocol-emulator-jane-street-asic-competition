@@ -4,10 +4,12 @@
  *
  * protocol.h: the whole programming interface of the Polyglot chip.
  *
- * Version 1 (W2): cycle counter, GPIO, timed GPIO (cycle-exact edges), edge
- * capture, blocking-access timeout, and the Wire Engines. UART and SPI are
- * not hardware blocks: they are a handful of generic engine parameters,
- * defined at the end of this file.
+ * Version 2 (W3): cycle counter, GPIO, timed GPIO (cycle-exact edges), edge
+ * capture, blocking-access timeout, and the Wire Engines (v2: per-word
+ * length, RX sample delay, open-drain clock with clock stretching both ways,
+ * late data launch, frame gates with events, arbitration detect). UART, SPI
+ * and I2C are not hardware blocks: they are generic engine parameters and a
+ * few lines of C, defined at the end of this file.
  *
  * Build with stock GCC, for example:
  *   riscv-none-elf-gcc -march=rv32ec -mabi=ilp32e -Os -ffreestanding -nostdlib
@@ -198,6 +200,8 @@ typedef struct {
     volatile uint32_t DIV;      /* bit period in cycles (>= 2) */
     volatile uint32_t PINS;
     volatile uint32_t FLUSH;    /* read blocks until everything is sent */
+    uint32_t _pad[25];
+    volatile uint32_t TXN[32];  /* TXN[n-1] = x pushes an n-bit word */
 } pg_wire_t;
 
 #define W0 ((pg_wire_t *)0x80000100u)
@@ -218,16 +222,33 @@ typedef struct {
 #define WIRE_OE_FRAME    (1u << 10)   /* drive only while a word is shifting */
 #define WIRE_OE_OPEN_DRAIN (2u << 10)
 #define WIRE_OE_NEVER    (3u << 10)
+#define WIRE_RX_DELAY(k) (((uint32_t)(k) & 7u) << 12)   /* sample k cycles late (internal clock) */
+#define WIRE_TX_LATE     (1u << 15)   /* data changes a quarter bit after the bit start */
 #define WIRE_LEN(n)      ((((uint32_t)(n) - 1u) & 31u) << 16)
+#define WIRE_CLK_OD      (1u << 21)   /* clock pin open drain */
+#define WIRE_CLK_WAIT    (1u << 22)   /* wait while a target holds the clock low */
+#define WIRE_GATE_LOW    (1u << 23)   /* frame while the GATE pin is low (chip select) */
+#define WIRE_GATE_I2C    (2u << 23)   /* frame from START to STOP */
+#define WIRE_EVENTS      (1u << 25)   /* frame start/end markers in the RX FIFO */
+#define WIRE_STRETCH     (1u << 26)   /* external clock: hold it low while TX is empty at a word boundary */
+#define WIRE_ARB_STOP    (1u << 27)   /* stop driving after a lost arbitration */
 
 #define WIRE_PINS(tx, rx, clk)  ((uint32_t)(tx) | ((uint32_t)(rx) << 8) | ((uint32_t)(clk) << 16))
+#define WIRE_GATE_PIN(g)        ((uint32_t)(g) << 24)
+
+/* RX FIFO markers (WIRE_EVENTS); data words never have bit 31 set unless LEN is 32 */
+#define WIRE_EV_START  0x80000001u
+#define WIRE_EV_END    0x80000002u
 
 /* STATUS fields */
 #define WIRE_TX_LEVEL(s)  ((s) & 0xFu)
 #define WIRE_RX_LEVEL(s)  (((s) >> 8) & 0xFu)
 #define WIRE_TX_ACTIVE    (1u << 16)
 #define WIRE_RX_BUSY      (1u << 17)
+#define WIRE_FRAME_ACTIVE (1u << 18)
+#define WIRE_STRETCHING   (1u << 19)
 #define WIRE_RX_OVERFLOW  (1u << 24)
+#define WIRE_ARB_LOST     (1u << 25)
 
 typedef struct {
     uint32_t ctrl;
@@ -245,6 +266,7 @@ static inline void wire_config(pg_wire_t *w, wire_cfg_t c)
 }
 
 static inline void     wire_put(pg_wire_t *w, uint32_t x) { w->TX = x; }
+static inline void     wire_putn(pg_wire_t *w, int n, uint32_t x) { w->TXN[n - 1] = x; }
 static inline uint32_t wire_get(pg_wire_t *w)             { return w->RX; }
 static inline int      wire_rx_count(pg_wire_t *w)        { return (int)WIRE_RX_LEVEL(w->STATUS); }
 static inline void     wire_flush(pg_wire_t *w)           { (void)w->FLUSH; }
@@ -278,9 +300,14 @@ static inline int uart_getc(pg_wire_t *w)
 
 #define WIRE_SPI_MODE(m)  (((m) & 2u ? WIRE_CPOL : 0u) | ((m) & 1u ? WIRE_CPHA : 0u))
 
-#define WIRE_SPI_CTRL(sck_pin, mosi_pin, miso_pin, mode, hz) ((wire_cfg_t){       \
-    WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_CLK_OUT | WIRE_SPI_MODE(mode) | WIRE_LEN(8), \
-    PG_BIT_TICKS(hz), WIRE_PINS(mosi_pin, miso_pin, sck_pin) })
+#define WIRE_SPI_CTRL(sck_pin, mosi_pin, miso_pin, mode, hz) \
+    WIRE_SPI_CTRL_DLY(sck_pin, mosi_pin, miso_pin, mode, hz, 0)
+
+/* Above about F/8 the MISO input path (synchronizer + device delay) needs a
+ * later sample point: rx_delay cycles (0..7), e.g. 3 at F/4. */
+#define WIRE_SPI_CTRL_DLY(sck_pin, mosi_pin, miso_pin, mode, hz, rx_delay) ((wire_cfg_t){ \
+    WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_CLK_OUT | WIRE_SPI_MODE(mode) | WIRE_LEN(8) | \
+    WIRE_RX_DELAY(rx_delay), PG_BIT_TICKS(hz), WIRE_PINS(mosi_pin, miso_pin, sck_pin) })
 
 static inline void spi_select(int cs_pin) { pin_write(cs_pin, 0); }
 
@@ -307,14 +334,123 @@ static inline void spi_transfer(pg_wire_t *w, const uint8_t *tx, uint8_t *rx, ui
     }
 }
 
-/* ---- SPI target (external clock), basic --------------------------------------
- * The controller's SCK clocks the engine. No chip-select framing yet (W3):
- * enable the engine before the first SCK edge. TX words must be queued before
- * the controller clocks them out.
+/* ---- SPI target (external clock) ---------------------------------------------
+ * The controller's SCK clocks the engine; chip select (active low) frames the
+ * transfer: a frame start restarts the bit count, and with WIRE_EVENTS the RX
+ * FIFO gets WIRE_EV_START / WIRE_EV_END around each frame's bytes. MISO is
+ * driven only while CS is low (OE_FRAME). Queue the first reply byte before
+ * the controller starts clocking.
  */
 
-#define WIRE_SPI_TARGET(sck_pin, mosi_pin, miso_pin, mode) ((wire_cfg_t){          \
-    WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_CLK_EXT | WIRE_SPI_MODE(mode) | WIRE_LEN(8), \
-    2u, WIRE_PINS(miso_pin, mosi_pin, sck_pin) })
+#define WIRE_SPI_TARGET(sck_pin, mosi_pin, miso_pin, cs_pin, mode) ((wire_cfg_t){       \
+    WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_CLK_EXT | WIRE_SPI_MODE(mode) | WIRE_LEN(8) | \
+    WIRE_GATE_LOW | WIRE_EVENTS | WIRE_OE_FRAME, \
+    2u, WIRE_PINS(miso_pin, mosi_pin, sck_pin) | WIRE_GATE_PIN(cs_pin) })
+
+/* ---- I2C controller: parameters plus START/STOP in C --------------------------
+ * SDA is the engine's TX and RX pin (open drain), SCL its clock pin (open
+ * drain, waits while a target stretches it). Each byte is an 8-bit word
+ * followed by a 1-bit word for the ACK slot. SDA changes a quarter bit after
+ * SCL falls (TX_LATE). START and STOP are made with GPIO while the engine
+ * lets go of the pins. Both pins must be uio pins with external pull-ups.
+ */
+
+#define WIRE_I2C_CTRL_BITS (WIRE_EN | WIRE_RX | WIRE_MSB_FIRST | WIRE_IDLE_HIGH | WIRE_OE_OPEN_DRAIN | \
+                            WIRE_CLK_OD | WIRE_CLK_WAIT | WIRE_TX_LATE | WIRE_LEN(8))
+
+typedef struct {
+    pg_wire_t *w;
+    int sda, scl;
+    uint32_t quarter;   /* quarter bit in cycles, for START/STOP timing */
+} i2c_t;
+
+static inline void i2c__pins(int sda_low, int scl_low, const i2c_t *b)
+{
+    uint32_t m = (1u << b->sda) | (1u << b->scl);
+    PG_GPIO_OUT &= ~m;                                  /* open drain: 0 when driven */
+    PG_GPIO_OE = (PG_GPIO_OE & ~m) | (sda_low ? 1u << b->sda : 0u) | (scl_low ? 1u << b->scl : 0u);
+}
+
+static inline void i2c__engine(const i2c_t *b, int on)   /* engine owns SDA/SCL when on */
+{
+    b->w->CTRL = WIRE_I2C_CTRL_BITS | (on ? WIRE_TX | WIRE_CLK_OUT : 0u);
+}
+
+static inline void i2c_init(i2c_t *b, pg_wire_t *w, int sda_pin, int scl_pin, uint32_t hz)
+{
+    b->w = w; b->sda = sda_pin; b->scl = scl_pin;
+    b->quarter = PG_BIT_TICKS(hz) / 4u;
+    i2c__pins(0, 0, b);                                  /* bus released */
+    w->CTRL = 0;
+    w->DIV  = PG_BIT_TICKS(hz);
+    w->PINS = WIRE_PINS(sda_pin, sda_pin, scl_pin);
+    i2c__engine(b, 0);
+}
+
+/* START, or repeated START after a transfer. */
+static inline void i2c_start(const i2c_t *b)
+{
+    if (b->w->CTRL & WIRE_TX) {         /* repeated START: the engine holds SCL low */
+        wire_flush(b->w);
+        i2c__pins(0, 1, b);             /* GPIO takes over: SCL low, SDA released */
+        i2c__engine(b, 0);
+        delay_ticks(b->quarter);
+        i2c__pins(0, 0, b);             /* SCL up */
+        while (!pin_read(b->scl)) { }   /* a target may still stretch it */
+        delay_ticks(2u * b->quarter);
+    }
+    i2c__pins(1, 0, b);                 /* SDA falls while SCL is high: START */
+    delay_ticks(2u * b->quarter);
+    i2c__pins(1, 1, b);                 /* SCL low */
+    delay_ticks(b->quarter);
+    i2c__engine(b, 1);                  /* engine holds SCL low, releases SDA */
+}
+
+static inline void i2c_stop(const i2c_t *b)
+{
+    wire_flush(b->w);
+    i2c__pins(1, 1, b);                 /* SDA and SCL low */
+    i2c__engine(b, 0);
+    delay_ticks(b->quarter);
+    i2c__pins(1, 0, b);                 /* SCL up */
+    while (!pin_read(b->scl)) { }
+    delay_ticks(2u * b->quarter);
+    i2c__pins(0, 0, b);                 /* SDA rises while SCL is high: STOP */
+    delay_ticks(2u * b->quarter);
+}
+
+/* Send a byte; returns 1 if the target acknowledged. */
+static inline int i2c_write(const i2c_t *b, uint8_t x)
+{
+    wire_putn(b->w, 8, x);
+    wire_putn(b->w, 1, 1u);             /* release SDA for the ACK */
+    (void)wire_get(b->w);               /* our own byte, read back */
+    return (wire_get(b->w) & 1u) == 0u;
+}
+
+/* Receive a byte; ack = 1 to acknowledge (more to come), 0 for the last byte. */
+static inline uint8_t i2c_read(const i2c_t *b, int ack)
+{
+    wire_putn(b->w, 8, 0xFFu);          /* release SDA, the target drives */
+    wire_putn(b->w, 1, ack ? 0u : 1u);
+    uint8_t x = (uint8_t)wire_get(b->w);
+    (void)wire_get(b->w);
+    return x;
+}
+
+/* ---- I2C target: parameters --------------------------------------------------
+ * SCL is the external clock (sampled on rising edges); START/STOP frame the
+ * transfer and appear as WIRE_EV_START / WIRE_EV_END in the RX FIFO. At each
+ * word boundary with nothing queued the engine stretches SCL, so C decides
+ * every ACK and every data byte at its own pace. Per byte: queue 0xFF (8 bits)
+ * to receive or the data byte to send, then the ACK slot as a 1-bit word
+ * (0 = ACK, 1 = release). The RX FIFO returns every word, including the
+ * 1-bit ACK slots.
+ */
+
+#define WIRE_I2C_TARGET(sda_pin, scl_pin) ((wire_cfg_t){                         \
+    WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_IDLE_HIGH | WIRE_OE_OPEN_DRAIN | \
+    WIRE_CLK_EXT | WIRE_GATE_I2C | WIRE_EVENTS | WIRE_STRETCH | WIRE_LEN(8),        \
+    2u, WIRE_PINS(sda_pin, sda_pin, scl_pin) })
 
 #endif /* POLYGLOT_PROTOCOL_H */

@@ -9,7 +9,8 @@
  * Pins: SCK uo[2] (P10), MOSI uo[3] (P11), CS_N uo[4] (P12), MISO ui[1] (P17).
  *
  * Host parameters (PG_SHARED): [0] SPI mode 0..3, [1] SCK frequency in Hz
- * (0 = 1 MHz), [2] RAM address.
+ * (0 = 1 MHz), [2] RAM address, [3] MISO sample delay in cycles (0..7,
+ * needed above about F/8).
  * Results: [4] 0x600D0000 | mismatches (or 0x600DBAD0 | mismatches),
  * [8..11] the 16 bytes read back.
  */
@@ -29,10 +30,11 @@ int main(void)
     uint32_t mode = PG_SHARED[0] & 3u;
     uint32_t hz   = PG_SHARED[1] ? PG_SHARED[1] : 1000000u;
     uint8_t  addr = (uint8_t)PG_SHARED[2];
+    uint32_t dly  = PG_SHARED[3] & 7u;
     uint8_t  wbuf[2 + N], rbuf[2 + N];
 
     pin_write(CS_PIN, 1);
-    wire_config(SPI, WIRE_SPI_CTRL(SCK_PIN, MOSI_PIN, MISO_PIN, mode, hz));
+    wire_config(SPI, WIRE_SPI_CTRL_DLY(SCK_PIN, MOSI_PIN, MISO_PIN, mode, hz, dly));
 
     wbuf[0] = 0x02;
     wbuf[1] = addr;

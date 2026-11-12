@@ -15,9 +15,10 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `test_boot.py` | bring-up: SPI load/read-back, byte/halfword/word memory test, blink timing |
 | `test_tgpio.py` | timed GPIO: every scheduled edge lands on its exact cycle; LATE flag, edge capture, blocking timeout |
 | `test_uart.py` | UART echo at 1 Mbaud (back to back) and 115200 baud; exact bit timing; framing error recovery |
-| `test_spi.py` | SPI controller against an SPI RAM model in modes 0-3 (1 and 5 MHz); SPI target with external clock (modes 0, 3) |
+| `test_spi.py` | SPI controller against an SPI RAM model in modes 0-3 (1, 5 and 12.5 MHz with RX sample delay); SPI target with CS framing, frame events and an aborted frame (modes 0, 3) |
+| `test_i2c.py` | I2C controller against a 24C02-style EEPROM model (NACK, page write, ACK polling, repeated START, clock stretching, setup/hold checks); chip as I2C target driven by a controller model |
 | `lib/host.py` | model of the host SPI loader protocol |
 | `lib/soc.py` | reset, firmware build/load, shared-memory and HOST_IRQ helpers |
-| `lib/uart.py`, `lib/spi.py` | independent UART and SPI peer models |
+| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py` | independent UART, SPI and I2C peer models; open-drain bus model for the uio pins |
 | `lib/pins.py` | shared driver for `ui_in` (several models drive different bits) |
 | `tb.v` | testbench wrapper around the top level |
