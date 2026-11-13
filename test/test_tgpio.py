@@ -3,6 +3,8 @@
 """Timed GPIO: every scheduled pin change must land in exactly the cycle
 the C code asked for, independent of how long the code took."""
 
+import os
+
 import cocotb
 from cocotb.triggers import ReadOnly, RisingEdge
 
@@ -14,7 +16,8 @@ def now_counter(dut):
     return int(dut.user_project.u_io.u_sys.now.value)
 
 
-@cocotb.test()
+# Needs the chip's NOW counter by name, which only exists in the RTL.
+@cocotb.test(skip=os.environ.get("GATES") == "yes")
 async def test_timed_gpio(dut):
     host = await start(dut)
     await load(host, "timed_gpio")
