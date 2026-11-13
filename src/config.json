@@ -33,6 +33,23 @@
   "DESIGN_REPAIR_MAX_SLEW_PCT": 30,
   "DESIGN_REPAIR_MAX_CAP_PCT": 40,
 
+  "//": "Polyglot: wire RC for estimates before routing. The sg13cmos5l LibreLane config leaves",
+  "//": "LAYERS_RC empty, so the tech-LEF values are used (Metal2 0.093 fF/um), about half of what",
+  "//": "extraction gives on this layout (0.182 fF/um median, 1.52 ohm/um). These are the OpenROAD",
+  "//": "RC fit from the sg13g2 config (same Metal1-4 tech-LEF values); TopMetal1 keeps its LEF value.",
+  "LAYERS_RC": {
+    "*": {
+      "Metal1": {"res": 8.54576e-03, "cap": 1e-10},
+      "Metal2": {"res": 2.53519e-03, "cap": 1.69121e-04},
+      "Metal3": {"res": 1.54329e-03, "cap": 1.82832e-04},
+      "Metal4": {"res": 6.31424e-04, "cap": 1.66454e-04},
+      "TopMetal1": {"res": 1.280488e-05, "cap": 1.108496e-04}
+    }
+  },
+
+  "//": "Polyglot: repair slew/cap again after global routing, with routed-length parasitics.",
+  "RUN_POST_GRT_DESIGN_REPAIR": true,
+
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,

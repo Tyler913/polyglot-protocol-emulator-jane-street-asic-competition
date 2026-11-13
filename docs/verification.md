@@ -37,7 +37,7 @@ Independent models catch mistakes in both the RTL and the test itself. Examples 
 
 ## Gate level and sign-off
 
-- P&R sign-off of the full design (four engines): LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners (+3.0 ns setup slack at the slow corner), Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-13)*.
+- P&R sign-off of the full design (four engines): LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners (+2.8 ns setup slack at the slow corner), Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-13)*.
 - Gate-level simulation of the routed netlist (`make -C test GATES=yes`, Icarus 13 with the IHP cell and SRAM models): SPI load and read-back, `memtest`, `blink`, all three UART tests and the four-engine `test_quad` pass *(gate-level simulation, local, 2026-11-13)*. `test_tgpio` reads the RTL's cycle counter by name and is skipped at gate level.
 - What gate level found: registers that a program never writes are X in simulation; a speculative register read let that X spread through the pipeline and stopped the CPU (silicon would just hold a random, unused value). The startup code now clears every register (22 bytes), and the CPU clears x0's register-file entry in reset.
 
