@@ -99,13 +99,13 @@ Any engine can own any output pin; pins an engine does not own follow GPIO (and 
 | Item | Value | Evidence |
 |---|---|---|
 | Clock | 50 MHz rated (slow corner 1.08 V / 125 C); typical-corner slack suggests 60 MHz or more at room temperature | P&R |
-| Setup slack at 50 MHz | +1.17 ns slow corner, +7.95 ns typical | P&R (2026-11-12) |
+| Setup slack at 50 MHz | +2.61 ns slow corner, +7.87 ns typical; hold +0.10 ns fast corner | P&R (2026-11-12) |
 | Critical path | SRAM clock-to-output (7.75 ns slow corner) into the CPU fetch/decode | P&R |
-| Cell area | 19,167 cells, 318,074 um^2 (CPU about 117k, each Wire Engine about 70k) | synthesis |
-| Std-cell utilization | 40.6 % of the 8x4 tile | P&R |
+| Cell area | 26,657 cells, 389,589 um^2 after synthesis (flat; 41 % of it flip-flops) | synthesis |
+| Std-cell utilization | 44.6 % of the 8x4 tile (51.0 % with the SRAM) | P&R |
 | Sign-off | LVS clean, KLayout DRC clean, antenna clean, Tiny Tapeout precheck passes | P&R |
 
-The SRAM macro needs special care on the CMOS5L tile, whose power grid is a single layer of Metal4 stripes: every stripe must run the full tile height, and a stripe may only cross the macro on one of the macro's own Metal4 supply columns of the same net. A LibreLane step in this repository (`librelane_plugin_polyglot.py`, `flow/odb_sram_stripes.py`) moves the stripes that cross the macro onto supply columns and connects them to the standard-cell rails. The approach follows Ken Pettit's IHP SRAM write-up; the code is our own.
+The SRAM macro needs special care on the CMOS5L tile, whose power grid is a single layer of Metal4 stripes: every stripe must run the full tile height, and a stripe may only cross the macro on one of the macro's own Metal4 supply columns of the same net. A LibreLane step in this repository (`librelane_plugin_polyglot.py`, `flow/odb_sram_stripes.py`) moves the stripes that cross the macro onto supply columns and connects them to the standard-cell rails. Routing: the logic above the macro talks to the logic on its right only through Metal3 (the one horizontal signal layer), so the corner is the congestion hot spot; a 6 um cell-free halo around the macro and a 55 % placement density cut global-routing overflow from 642 to 143, after which detailed routing converges to zero violations. The approach follows Ken Pettit's IHP SRAM write-up; the code is our own.
 
 ## 7. Credits
 

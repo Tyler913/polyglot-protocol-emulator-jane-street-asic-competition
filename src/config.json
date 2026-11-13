@@ -21,7 +21,8 @@
 
   "//": "PL_TARGET_DENSITY_PCT - You can increase this if Global Placement fails with error GPL-0302.",
   "//": "Users have reported that values up to 80 worked well for them.",
-  "PL_TARGET_DENSITY_PCT": 60,
+  "//": "Polyglot: 55 (not 60) spreads cells so global routing finishes without overflow near the SRAM corner.",
+  "PL_TARGET_DENSITY_PCT": 55,
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
@@ -67,8 +68,9 @@
   "//": "the macro's own supply columns (TT needs every stripe full height) and feeds all columns.",
   "PDN_OBSTRUCTIONS": ["Metal4 0 0 425.0 710.64"],
   "SRAM_STRIPES_REGION": [0, 425.0],
-  "FP_MACRO_HORIZONTAL_HALO": 2.0,
-  "FP_MACRO_VERTICAL_HALO": 0.48,
+  "//": "A 6 um cell-free ring around the SRAM leaves routing tracks free for nets turning its corner.",
+  "FP_MACRO_HORIZONTAL_HALO": 6.0,
+  "FP_MACRO_VERTICAL_HALO": 6.0,
   "//": "Keep signal routing off the macro (CMOS5L routes on Metal2-Metal4 only).",
   "ROUTING_OBSTRUCTIONS": [
     "Metal2 3.36 3.78 420.0 340.24",
