@@ -722,8 +722,8 @@ module pg_wire #(
   // ---------------------------------------------------------------------
   wire od       = (oe_mode == 2'd2);
   wire tx_shown = !gated || active;           // gated frames hide the TX line outside the frame
-  wire drv_line = (tx_shown && !arb_off) ? line : idle;
   wire arb_off  = arb_stop && arb_lost;   // lost: send only the idle (recessive) level
+  wire drv_line = (tx_shown && !arb_off) ? line : idle;
 
   assign tx_pin = txpin;
   assign tx_on  = en && tx_en;

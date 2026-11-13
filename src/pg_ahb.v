@@ -6,7 +6,10 @@
  *   - the SRAM (haddr[31] == 0), zero wait states for reads,
  *   - the register port (haddr[31] == 1, 4 KB window), word access only, in
  *     the data phase; the register slave may insert wait states with reg_ready = 0
- *     (this is how blocking FIFO reads stall the CPU),
+ *     (this is how blocking FIFO reads stall the CPU). The register read data
+ *     and the ready flag are registered here: every register access takes one
+ *     extra cycle, and the slave's decode/ready logic never reaches the CPU
+ *     in the same cycle (it was the slow-corner critical path at 50 MHz),
  *   - the host SPI loader, which owns the SRAM while the CPU is halted and
  *     otherwise only uses cycles in which the CPU leaves the SRAM idle.
  *
@@ -68,6 +71,8 @@ module pg_ahb (
   reg [31:0] dp_addr;
   reg [2:0]  dp_size;
   reg        wr_done;  // the data-phase SRAM write was already performed
+  reg        io_done;  // the register slave accepted the access last cycle
+  reg [31:0] io_rdata; // its read data, returned in the following cycle
 
   wire dp_sram_write = dp_sram && dp_write;
   wire wr_now        = dp_sram_write && !wr_done;
@@ -76,7 +81,7 @@ module pg_ahb (
   // Stall when the pending write and a new SRAM read compete for the port,
   // or when the register slave is not ready.
   wire stall_sram = wr_now && ap_sram_read;
-  wire stall_io   = dp_io && !reg_ready;
+  wire stall_io   = dp_io && !io_done;
   assign hready   = !stall_sram && !stall_io;
 
   always @(posedge clk) begin
@@ -87,7 +92,15 @@ module pg_ahb (
       dp_addr  <= 32'd0;
       dp_size  <= 3'd0;
       wr_done  <= 1'b0;
+      io_done  <= 1'b0;
+      io_rdata <= 32'd0;
     end else begin
+      if (reg_valid && reg_ready) begin
+        io_done  <= 1'b1;
+        io_rdata <= reg_rdata;
+      end else if (hready) begin
+        io_done  <= 1'b0;
+      end
       if (hready) begin
         dp_sram  <= ap_sram;
         dp_io    <= ap_io;
@@ -167,12 +180,12 @@ module pg_ahb (
   // ---------------------------------------------------------------------
   // Register port and read data
   // ---------------------------------------------------------------------
-  assign reg_valid = dp_io;
+  assign reg_valid = dp_io && !io_done;
   assign reg_write = dp_write;
   assign reg_addr  = dp_addr[11:0];
   assign reg_wdata = hwdata;
 
-  assign hrdata = dp_io ? reg_rdata : sram_rdata;
+  assign hrdata = dp_io ? io_rdata : sram_rdata;
 
   wire _unused = &{1'b0, dp_addr[31:12], htrans[0], dp_size[2], host_addr[15:12]};
 
