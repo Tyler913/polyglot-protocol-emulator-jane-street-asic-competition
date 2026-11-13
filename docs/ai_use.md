@@ -9,5 +9,5 @@ This project was built by one person working with an AI coding assistant (Claude
 
 - Every protocol claim is backed by a test that runs real firmware on the RTL and is judged by an independent model written from the protocol specification, not from the RTL. Models were written separately from the RTL features they check, and several bugs were found in both directions (see `verification.md`).
 - Every area and timing number is tagged with its evidence level (synthesis, P&R, simulation) and comes from a tool report, not from estimates presented as results.
-- External designs are credited, never copied: the CPU (Hazard3) is vendored unchanged with its license; the SRAM power-grid approach follows Ken Pettit's published write-up, but the code is our own.
+- External designs are credited, never copied: the CPU (Hazard3) is vendored with its license and one small, marked change (x0 entry cleared in reset); the SRAM power-grid approach follows Ken Pettit's published write-up, but the code is our own.
 - Development logs, decisions (ADRs) and status notes were kept for every session, so the reasoning behind each change can be reviewed.

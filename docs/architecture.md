@@ -27,7 +27,7 @@ Polyglot is a protocol emulator that is programmed in plain C. Protocol knowledg
 
 | Block | Source | Role |
 |---|---|---|
-| CPU | `src/hazard3_*` | Hazard3 by Luke Wren (the RP2350 core), RV32EC with M-mode traps, vendored unchanged. Runs C compiled with stock GCC or Clang. |
+| CPU | `src/hazard3_*` | Hazard3 by Luke Wren (the RP2350 core), RV32EC with M-mode traps, vendored with one marked change (the never-written x0 register-file entry is cleared during reset, so gate-level simulation has no X from it). Runs C compiled with stock GCC or Clang. |
 | Memory | `pg_sram.v` | One IHP `RM_IHPSG13_1P_1024x32_c2_bm_bist` macro: 4 KB for code, data and stack. |
 | Fabric | `pg_ahb.v` | AHB-Lite: SRAM with zero read wait states; register window at 0x8000_0000 (one wait state per access: read data and ready are registered, which keeps the I/O decode off the CPU's critical path); host port that uses idle SRAM cycles. |
 | Host port | `pg_host_spi.v` | SPI target (mode 0): WRITE/READ memory, CTRL (run), STATUS. |

@@ -67,8 +67,14 @@ end else begin: real_dualport_noreset
 	`endif
 	reg [W_DATA-1:0] mem [0:N_REGS-1];
 
+	// Polyglot local change: x0's entry is never written, so clear it
+	// (synchronously) while the core is in reset. Read results are unchanged
+	// (x0 reads are masked downstream); this only keeps gate-level
+	// simulation free of X from that entry.
 	always @ (posedge clk) begin
-		if (wen) begin
+		if (!rst_n) begin
+			mem[0] <= {W_DATA{1'b0}};
+		end else if (wen) begin
 			mem[waddr_masked] <= wdata;
 		end
 		rdata1 <= mem[raddr1_masked];

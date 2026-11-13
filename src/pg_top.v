@@ -96,10 +96,6 @@ module tt_um_tyler913_polyglot (
 
   hazard3_cpu_1port #(
       .RESET_VECTOR       (32'h0000_0000),
-      // Reset the register file: x0 (never written) is otherwise unknown, and
-      // gate-level simulation then sees X leak through the bypass muxes. The
-      // IHP library only has resettable flops, so this costs just reset wiring.
-      .RESET_REGFILE      (1),
       .MTVEC_INIT         (32'h0000_0000),
       .EXTENSION_A        (0),
       .EXTENSION_C        (1),
