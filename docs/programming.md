@@ -80,6 +80,17 @@ Both are checked against the device datasheets in simulation (`test/test_ws2812.
 | Pulse widths, odd timing, anything else | timed GPIO (`pin_out_at`, `pins_out_at`, `pin_oe_at`) and edge capture |
 | Several protocols at once | one engine each; `wait_events()` sleeps until any of them has data |
 
+### Several protocols in one program
+
+Each engine runs on its own, so the CPU only has to keep the FIFOs fed. A simple way to write that in plain C is one cooperative task per protocol (`sw/include/pt.h`, in the style of protothreads). A task is written as straight-line code with `PT_WAIT(pt, condition)` where it would otherwise block, and `main()` calls the tasks round-robin. `sw/tests/mixed4` runs CAN, SPI, UART and I2C this way, one per engine. Two rules:
+
+- Inside a task, use only accesses that cannot stall the CPU: wait for `wire_rx_count(w) > 0` before `wire_get()`, and for `!(w->STATUS & WIRE_TX_ACTIVE)` instead of `wire_flush()`.
+- Keep every step short. The FIFOs are 4 words deep; four UART bytes at 1 Mbaud are 2000 cycles, so no task may run longer than that between waits.
+
+### Fitting in 4 KB
+
+The program, its data and a 256-byte stack share 3.5 KB (the top 256 bytes are the host mailbox). Measured sizes (code + data, GCC 15 `-Os`): UART echo 485 B, SPI RAM 674 B, I2C EEPROM 954 B, CAN 734 B, USB HID keyboard 1.9 KB, and all of CAN + SPI + UART + I2C as concurrent tasks 3.5 KB. The core has no multiply/divide unit, so avoid 64-bit arithmetic at run time: one 64-bit division pulls about 1.4 KB of libgcc into the image. `protocol.h` keeps its own helpers 32-bit.
+
 ## 6. Reference (protocol.h)
 
 | Group | Functions and macros |

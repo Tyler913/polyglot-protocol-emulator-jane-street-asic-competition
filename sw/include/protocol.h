@@ -719,42 +719,56 @@ typedef struct {
     uint8_t  acked;
 } can_frame_t;
 
+/* Parse a received frame: words[] holds the first destuffed data words (MSB first,
+ * 32 bits each, at most 4 kept), nw how many data words arrived in all, end_marker
+ * the RX FIFO end marker. Returns 0, or -1 if the frame was too short. Use it to
+ * receive without blocking: collect words while wire_rx_count() > 0, then parse. */
+static inline int can_parse(const uint32_t *words, uint32_t nw, uint32_t end_marker, can_frame_t *f)
+{
+    /* Bit i of the frame (SOF = bit 0) is bit 31 - (i & 31) of words[i >> 5]. Fields are
+     * pulled out with shifts, and the CRC runs over a shifted copy of each word, so a
+     * frame takes well under 1000 cycles (cooperative tasks rely on short steps). */
+    uint32_t nbits = (nw > 0 ? nw - (WIRE_END_BITS(end_marker) ? 1u : 0u) : 0u) * 32u +
+                     WIRE_END_BITS(end_marker);
+    if (nbits < 19u) return -1;
+    uint32_t dlc = (words[0] >> 13) & 15u;          /* bits 15..18 */
+    if (dlc > 8) dlc = 8;
+    uint32_t end = 19u + 8u * dlc;                 /* CRC field starts here */
+    if (nbits < end + 15u + 2u) return -1;
+    uint32_t crc = 0;                              /* CRC-15 over SOF..data, then the CRC: residual 0 */
+    for (uint32_t k = 0, n = end + 15u; n; k++) {
+        uint32_t x = words[k], m = n < 32u ? n : 32u;
+        n -= m;
+        while (m--) {
+            uint32_t fb = ((x >> 31) ^ (crc >> 14)) & 1u;
+            x <<= 1;
+            crc = (crc << 1) & 0x7FFFu;
+            if (fb) crc ^= 0x4599u;
+        }
+    }
+    f->id = (words[0] >> 20) & 0x7FFu;             /* bits 1..11 */
+    f->dlc = (uint8_t)dlc;
+    for (uint32_t b = 0; b < dlc; b++) {
+        uint32_t pos = 19u + 8u * b, sh = pos & 31u, v = words[pos >> 5] << sh;
+        if (sh > 24u) v |= words[(pos >> 5) + 1u] >> (32u - sh);
+        f->data[b] = (uint8_t)(v >> 24);
+    }
+    f->crc_ok = (crc == 0);
+    f->acked  = (uint8_t)!((words[(end + 16u) >> 5] >> (31u - ((end + 16u) & 31u))) & 1u);  /* ACK slot */
+    return 0;
+}
+
 /* Receive one frame (blocks). Returns 0, or -1 if the frame was too short. */
 static inline int can_recv(pg_wire_t *w, can_frame_t *f)
 {
-    uint32_t words[4], nw = 0, w32, nbits;
+    uint32_t words[4], nw = 0, w32;
     for (;;) {                                      /* destuffed bits, MSB first, 32 per word */
         w32 = wire_get(w);
         if (WIRE_IS_END(w32)) break;
         if (nw < 4) words[nw] = w32;
         nw++;
     }
-    nbits = (nw > 0 ? nw - (WIRE_END_BITS(w32) ? 1u : 0u) : 0u) * 32u + WIRE_END_BITS(w32);
-    if (nw > 4) nw = 4;
-#define CANBIT(i) ((words[(i) >> 5] >> (31u - ((i) & 31u))) & 1u)
-    if (nbits < 19u) return -1;
-    uint32_t id = 0, dlc = 0, crc = 0;
-    for (uint32_t i = 1; i <= 11; i++) id = (id << 1) | CANBIT(i);
-    for (uint32_t i = 15; i <= 18; i++) dlc = (dlc << 1) | CANBIT(i);
-    if (dlc > 8) dlc = 8;
-    uint32_t end = 19u + 8u * dlc;                 /* CRC field starts here */
-    if (nbits < end + 15u + 2u) return -1;
-    for (uint32_t i = 0; i < end + 15u; i++) {    /* CRC-15 over SOF..data, then the CRC: residual 0 */
-        uint32_t fb = CANBIT(i) ^ ((crc >> 14) & 1u);
-        crc = (crc << 1) & 0x7FFFu;
-        if (fb) crc ^= 0x4599u;
-    }
-    f->id = id;
-    f->dlc = (uint8_t)dlc;
-    for (uint32_t b = 0; b < dlc; b++) {
-        uint32_t x = 0;
-        for (uint32_t i = 0; i < 8; i++) x = (x << 1) | CANBIT(19u + 8u * b + i);
-        f->data[b] = (uint8_t)x;
-    }
-    f->crc_ok = (crc == 0);
-    f->acked  = (uint8_t)!CANBIT(end + 16u);         /* ACK slot after the CRC delimiter */
-#undef CANBIT
-    return 0;
+    return can_parse(words, nw, w32, f);
 }
 
 #endif /* POLYGLOT_PROTOCOL_H */
