@@ -22,16 +22,30 @@ module pg_sram (
 );
 
 `ifdef SYNTHESIS
+  // The macro's inputs are characterized only up to 0.6 ns transition, and
+  // its pins sit along one 417 um edge, far from much of the logic. Each
+  // input gets its own buf_4, so a weak logic gate never drives the long wire
+  // to the pin by itself. (No dont-touch: hold repair must still be able to
+  // add delay in front of these buffers.)
+  wire [76:0] ib_in = {en, en & we, en & ~we, addr, wdata, wmask};
+  wire [76:0] ib_out;
+  genvar i;
+  generate
+    for (i = 0; i < 77; i = i + 1) begin : g_sram_ibuf
+      sg13cmos5l_buf_4 sram_ibuf (.A(ib_in[i]), .X(ib_out[i]));
+    end
+  endgenerate
+
   RM_IHPSG13_1P_1024x32_c2_bm_bist u_macro (
       .A_CLK       (clk),
-      .A_MEN       (en),
-      .A_WEN       (en & we),
-      .A_REN       (en & ~we),
-      .A_ADDR      (addr),
-      .A_DIN       (wdata),
+      .A_MEN       (ib_out[76]),
+      .A_WEN       (ib_out[75]),
+      .A_REN       (ib_out[74]),
+      .A_ADDR      (ib_out[73:64]),
+      .A_DIN       (ib_out[63:32]),
       .A_DLY       (1'b1),
       .A_DOUT      (rdata),
-      .A_BM        (wmask),
+      .A_BM        (ib_out[31:0]),
       .A_BIST_CLK  (1'b0),
       .A_BIST_EN   (1'b0),
       .A_BIST_MEN  (1'b0),
