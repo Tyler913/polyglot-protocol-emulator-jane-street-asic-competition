@@ -21,9 +21,10 @@
 | `test_eth` | `eth_tx` | IEEE 802.3 transmit decoder (`lib/eth.py`): Manchester symbols, differential pair, preamble/SFD, FCS checked with zlib, TP_IDL; run at a 40 MHz clock |
 | `test_ws2812` | `ws2812` | WS2812 datasheet timing model: high-pulse widths and bit periods |
 | `test_onewire` | `onewire` | 1-Wire device model (DS18B20-style ROM): reset/presence, write and read slot timing; CRC-8 checked in C |
+| `test_quad` | `quad_uart` | All four Wire Engines at once (two full, two lite) as UARTs at 1 Mbaud, each judged by its own UART model: banners, then all four receivers busy at the same time and every byte echoed |
 | `test_can` | `can` | CAN bus model (`lib/can.py`, wired-AND bus with transceiver delay) and a second controller node: stuffing, CRC-15, ACK; the node joins the chip's SOF with a lower identifier, the chip loses arbitration at identifier bit 5, receives the winner's frame and retries. Limitation: the chip does not yet drive the ACK slot as a receiver |
 
-All tests also run in GitHub Actions on every push.
+26 tests in all; they also run in GitHub Actions on every push.
 
 ## What the models found
 
@@ -36,8 +37,9 @@ Independent models catch mistakes in both the RTL and the test itself. Examples 
 
 ## Gate level and sign-off
 
-- P&R sign-off of the full design: LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners, Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-12)*.
-- Gate-level simulation: the TT flow's GL test (Icarus 13 with the IHP cell and SRAM models) runs in the GDS workflow. *(pending)*
+- P&R sign-off of the full design (four engines): LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners (+3.0 ns setup slack at the slow corner), Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-13)*.
+- Gate-level simulation of the routed netlist (`make -C test GATES=yes`, Icarus 13 with the IHP cell and SRAM models): SPI load and read-back, `memtest`, `blink`, all three UART tests and the four-engine `test_quad` pass *(gate-level simulation, local, 2026-11-13)*. `test_tgpio` reads the RTL's cycle counter by name and is skipped at gate level.
+- What gate level found: registers that a program never writes are X in simulation; a speculative register read let that X spread through the pipeline and stopped the CPU (silicon would just hold a random, unused value). The startup code now clears every register (22 bytes), and the CPU clears x0's register-file entry in reset.
 
 ## FPGA
 
