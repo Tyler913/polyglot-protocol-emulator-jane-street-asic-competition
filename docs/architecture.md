@@ -94,20 +94,20 @@ The engine never decides *what* to send; it only decides *when* each bit moves. 
 | uo[7] | host SPI MISO |
 | uio[7:0] | bidirectional protocol pins (0..7) |
 
-Any engine can own any output pin; pins an engine does not own follow GPIO (and timed GPIO). Inputs from all pins (and a read-back of the outputs) go through two-flop synchronizers.
+Any engine can own any output pin; pins an engine does not own follow GPIO (and timed GPIO). The engines' pin signals (value, output enable, ownership) leave each engine through flip-flops, and GPIO is a register too, so the pin mux only selects between register outputs: the pins do not glitch. Inputs from all pins (and a read-back of the outputs) go through two-flop synchronizers.
 
 ## 6. Implementation results
 
 | Item | Value | Evidence |
 |---|---|---|
 | Clock | 50 MHz rated (slow corner 1.08 V / 125 C); typical-corner slack suggests 60 MHz or more at room temperature | P&R |
-| Setup slack at 50 MHz | +0.78 ns slow corner, +6.29 ns typical; hold +0.10 ns fast corner | P&R (2026-11-13) |
-| Critical path | Wire Engine 0 bit timer (`div` register) through the TX logic and pin mux to an output pin | P&R |
-| Cell area | 39,577 cells, 549,787 um^2 after synthesis (flat; 38 % of it flip-flops). A full engine is about 116k um^2, a lite one about 80k | synthesis |
-| Std-cell utilization | 61.6 % of the 8x4 tile (66.1 % with the SRAM) | P&R |
+| Setup slack at 50 MHz | +3.02 ns slow corner, +9.51 ns typical; hold +0.11 ns fast corner | P&R (2026-11-13) |
+| Critical path | SRAM clock-to-output (7.75 ns slow corner) into the CPU | P&R |
+| Cell area | 38,198 cells, 542,050 um^2 after synthesis (flat; 39 % of it flip-flops). A full engine is about 116k um^2, a lite one about 80k | synthesis |
+| Std-cell utilization | 60.7 % of the 8x4 tile (65.3 % with the SRAM) | P&R |
 | Sign-off | LVS clean, KLayout DRC clean, antenna clean, Tiny Tapeout precheck passes | P&R |
 
-The SRAM macro needs special care on the CMOS5L tile, whose power grid is a single layer of Metal4 stripes: every stripe must run the full tile height, and a stripe may only cross the macro on one of the macro's own Metal4 supply columns of the same net. A LibreLane step in this repository (`librelane_plugin_polyglot.py`, `flow/odb_sram_stripes.py`) moves the stripes that cross the macro onto supply columns and connects them to the standard-cell rails. Routing: the logic above the macro talks to the logic on its right only through Metal3 (the one horizontal signal layer), so the corner is the congestion hot spot; a 6 um cell-free halo around the macro keeps tracks free at the corner. With four engines the placement density is 68 % (shorter wires), and global routing ends with almost no overflow (29); detailed routing converges to zero violations. The approach follows Ken Pettit's IHP SRAM write-up; the code is our own.
+The SRAM macro needs special care on the CMOS5L tile, whose power grid is a single layer of Metal4 stripes: every stripe must run the full tile height, and a stripe may only cross the macro on one of the macro's own Metal4 supply columns of the same net. A LibreLane step in this repository (`librelane_plugin_polyglot.py`, `flow/odb_sram_stripes.py`) moves the stripes that cross the macro onto supply columns and connects them to the standard-cell rails. Routing: the logic above the macro talks to the logic on its right only through Metal3 (the one horizontal signal layer), so the corner is the congestion hot spot; a 6 um cell-free halo around the macro keeps tracks free at the corner. With four engines the placement density is 68 %, and global routing ends with no overflow. Placement turned out to be sensitive to where flip-flops sit on the output path: registering the pins after the pin mux made the placer's wire length 18 % worse and routing failed, while registering the same signals inside each engine improved it. The approach follows Ken Pettit's IHP SRAM write-up; the code is our own.
 
 ## 7. Credits
 

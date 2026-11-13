@@ -728,20 +728,29 @@ module pg_wire #(
   wire drv_line = (tx_shown && !arb_off) ? line : idle;
 
   assign tx_pin = txpin;
-  assign tx_on  = en && tx_en;
-  assign tx_val = od ? 1'b0 : drv_line;
-  assign tx_oe  = (oe_mode == 2'd0) ? 1'b1 :
-                  (oe_mode == 2'd1) ? (gated ? active : (tx_busy || tail || itail_on)) :
-                  od                ? !drv_line : 1'b0;
+  assign clk_pin = ckpin;
 
   wire sck = tx_busy ? ((cpol ^ cpha) ^ second) : cpol;
 
+  // Pin-side values. They leave the engine through flip-flops (below), so the
+  // pins never glitch and the pin mux / pad path starts at a register.
+  wire tx_on_c  = en && tx_en;
+  wire tx_val_c = od ? 1'b0 : drv_line;
+  wire tx_oe_c  = (oe_mode == 2'd0) ? 1'b1 :
+                  (oe_mode == 2'd1) ? (gated ? active : (tx_busy || tail || itail_on)) :
+                  od                ? !drv_line : 1'b0;
   // CLK pin: bit clock, stretch (external clock), or the differential pair's second line
-  assign clk_pin = ckpin;
-  assign clk_on  = en && ((diff && tx_en) || (clk_out && !clk_ext) || (clk_ext && stretching));
-  assign clk_val = diff ? (se0_now ? 1'b0 : !drv_line) :
+  wire clk_on_c  = en && ((diff && tx_en) || (clk_out && !clk_ext) || (clk_ext && stretching));
+  wire clk_val_c = diff ? (se0_now ? 1'b0 : !drv_line) :
                    (clk_ext || clk_od) ? 1'b0 : sck;
-  assign clk_oe  = diff ? tx_oe : clk_ext ? 1'b1 : (clk_od ? !sck : 1'b1);
+  wire clk_oe_c  = diff ? tx_oe_c : clk_ext ? 1'b1 : (clk_od ? !sck : 1'b1);
+
+  reg [5:0] pin_q;
+  always @(posedge clk) begin
+    if (rst) pin_q <= 6'd0;
+    else     pin_q <= {tx_on_c, tx_val_c, tx_oe_c, clk_on_c, clk_val_c, clk_oe_c};
+  end
+  assign {tx_on, tx_val, tx_oe, clk_on, clk_val, clk_oe} = pin_q;
 
   // ---------------------------------------------------------------------
   // Registers
