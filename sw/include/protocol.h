@@ -26,7 +26,12 @@
 #define PG_F_CPU 50000000u          /* system clock in Hz */
 #endif
 
-#define PG_US_TO_TICKS(us)  ((uint32_t)((uint64_t)(us) * PG_F_CPU / 1000000u))
+/* Time conversions. With a whole-MHz clock, PG_US_TO_TICKS is one 32-bit multiply, so a
+ * run-time argument does not pull libgcc's 64-bit divide (about 1.4 KB) into the image.
+ * PG_NS_TO_TICKS is meant for constants. */
+#define PG_US_TO_TICKS(us)  ((PG_F_CPU % 1000000u == 0u)                              \
+    ? (uint32_t)(us) * (PG_F_CPU / 1000000u)                                         \
+    : (uint32_t)((uint64_t)(us) * PG_F_CPU / 1000000u))
 #define PG_NS_TO_TICKS(ns)  ((uint32_t)((uint64_t)(ns) * PG_F_CPU / 1000000000u))
 
 /* Cycles per bit for a bit rate in Hz, rounded to nearest. */
@@ -293,8 +298,21 @@ static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t ini
     w->CRCCFG  = ((uint32_t)(width - 1) & 31u) | (xorout ? 1u << 5 : 0u) | (((uint32_t)rx_skip & 31u) << 8);
 }
 
-/* Bit period for a rate in Hz in 1/256 cycles: DIV = x >> 8, DIV_FRAC = x & 0xFF */
-#define PG_BIT_FIX8(hz)  ((uint32_t)(((uint64_t)PG_F_CPU * 256u + (hz) / 2u) / (hz)))
+/* Bit period for a rate in Hz in 1/256 cycles, rounded: DIV = x >> 8, DIV_FRAC = x & 0xFF.
+ * Constants fold at compile time; a run-time rate uses 32-bit long division (two base-16
+ * digits) instead of a 64-bit divide, which would add about 1.4 KB of libgcc to the image. */
+static inline uint32_t pg_bit_fix8(uint32_t hz)
+{
+    uint32_t q = PG_F_CPU / hz, r = PG_F_CPU % hz;
+    for (int i = 0; i < 2; i++) {      /* r < hz <= 2^27, so r << 4 cannot overflow */
+        r <<= 4;
+        q = (q << 4) | (r / hz);
+        r %= hz;
+    }
+    return q + (2u * r >= hz);
+}
+#define PG_BIT_FIX8_CONST(hz) ((uint32_t)(((uint64_t)PG_F_CPU * 256u + (hz) / 2u) / (hz)))
+#define PG_BIT_FIX8(hz) (__builtin_constant_p(hz) ? PG_BIT_FIX8_CONST(hz) : pg_bit_fix8(hz))
 
 /* RX FIFO markers (WIRE_EVENTS); data words never have bit 31 set unless LEN is 32.
  * After a packet whose length is not a whole number of words, the end marker
