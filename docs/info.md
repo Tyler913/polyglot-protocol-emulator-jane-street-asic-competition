@@ -13,9 +13,9 @@ Polyglot is a protocol emulator that you program in plain C. A Hazard3 RISC-V co
 Two kinds of hardware give the C program exact timing:
 
 - **Timed GPIO**: `pin_out_at(pin, value, t)` queues a pin change that the hardware applies in exactly clock cycle `t`, however long the C code took to get there. Input edges can be timestamped the same way. Any protocol can be bit-banged with cycle-exact edges.
-- **Wire Engines** (2 in this version): protocol-agnostic serial engines with a shift register, an internal or external bit clock, TX/RX FIFOs with per-word length, output-enable and open-drain control, clock stretching in both directions, chip-select or START/STOP framing with frame events, and arbitration detect. Reading an empty RX FIFO or writing a full TX FIFO simply stalls the CPU until the engine is ready. UART, SPI and I2C (controller and target for each) are a few lines of parameters and C in `protocol.h`, not hardware blocks.
+- **Wire Engines** (4 in this version; engines 0 and 1 are full, engines 2 and 3 are "lite": no line codes, bit stuffing, differential output, CRC or timed auto-reply): protocol-agnostic serial engines with a shift register, an internal or external bit clock, TX/RX FIFOs with per-word length, output-enable and open-drain control, clock stretching in both directions, chip-select or START/STOP framing with frame events, and arbitration detect. Reading an empty RX FIFO or writing a full TX FIFO simply stalls the CPU until the engine is ready. UART, SPI and I2C (controller and target for each) are a few lines of parameters and C in `protocol.h`, not hardware blocks.
 
-Status (W3): CPU, SRAM, host loader, timed GPIO, edge capture and Wire Engine v2 pass RTL simulation with C firmware for UART, SPI and I2C in both roles, judged by independent peer models.
+Status: CPU, SRAM, host loader, timed GPIO, edge capture and the Wire Engines pass RTL simulation with C firmware for UART, SPI, I2C (both roles each), USB low-speed HID keyboard, 10BASE-T transmit, CAN 2.0A, WS2812, 1-Wire and four UARTs at once, judged by independent peer models (26 tests). A gate-level simulation of the routed netlist boots C programs from the SRAM.
 
 ### Host interface (SPI target, mode 0, SCK <= clk/8)
 

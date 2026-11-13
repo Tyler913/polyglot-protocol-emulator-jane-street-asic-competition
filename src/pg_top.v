@@ -216,7 +216,7 @@ module tt_um_tyler913_polyglot (
   wire [5:0] proto_uo;
   wire       host_irq;
 
-  pg_io #(.NUM_WIRES(2)) u_io (
+  pg_io #(.NUM_WIRES(4), .NUM_FULL(2)) u_io (
       .clk    (clk),
       .rst    (~cpu_run),
       .valid  (reg_valid),

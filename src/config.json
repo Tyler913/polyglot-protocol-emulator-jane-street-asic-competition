@@ -21,8 +21,8 @@
 
   "//": "PL_TARGET_DENSITY_PCT - You can increase this if Global Placement fails with error GPL-0302.",
   "//": "Users have reported that values up to 80 worked well for them.",
-  "//": "Polyglot: 55 (not 60) spreads cells so global routing finishes without overflow near the SRAM corner.",
-  "PL_TARGET_DENSITY_PCT": 55,
+  "//": "Polyglot: 68 with four Wire Engines (std-cell utilization about 62 %); global routing then has almost no overflow.",
+  "PL_TARGET_DENSITY_PCT": 68,
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",

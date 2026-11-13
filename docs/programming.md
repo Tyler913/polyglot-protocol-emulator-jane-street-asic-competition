@@ -89,7 +89,7 @@ Both are checked against the device datasheets in simulation (`test/test_ws2812.
 | Timed GPIO | `pin_out_at`, `pins_out_at`, `pin_oe_at`, `timed_flush`, `timed_late` |
 | Capture and waiting | `capture_arm`, `capture_wait`, `capture_ready`, `pin_wait_edge`, `block_timeout`, `block_timed_out`, `wait_events` |
 | Host | `PG_SHARED[]`, `host_irq`, `pg_park` |
-| Engines | `W0`, `W1`, `wire_config`, `wire_put`, `wire_putn`, `wire_get`, `wire_rx_count`, `wire_flush`, `wire_tx_discard`, `wire_crc`, `WIRE_*` bits |
+| Engines | `W0`..`W3` (`W2`, `W3` lite), `wire_config`, `wire_put`, `wire_putn`, `wire_get`, `wire_rx_count`, `wire_flush`, `wire_tx_discard`, `wire_crc`, `WIRE_*` bits |
 | UART | `WIRE_UART_8N1`, `uart_putc`, `uart_puts`, `uart_getc` |
 | SPI | `WIRE_SPI_CTRL`, `WIRE_SPI_CTRL_DLY`, `spi_select`, `spi_deselect`, `spi_xfer`, `spi_transfer`, `WIRE_SPI_TARGET` |
 | I2C | `i2c_init`, `i2c_start`, `i2c_stop`, `i2c_write`, `i2c_read`, `WIRE_I2C_TARGET` |

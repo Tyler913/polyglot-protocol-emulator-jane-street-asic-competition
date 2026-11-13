@@ -33,7 +33,7 @@ Polyglot is a protocol emulator that is programmed in plain C. Protocol knowledg
 | Host port | `pg_host_spi.v` | SPI target (mode 0): WRITE/READ memory, CTRL (run), STATUS. |
 | I/O | `pg_io.v` | Address decode, two-flop input synchronizers, the blocking-access timeout, and the pinmux. |
 | System | `pg_sysio.v` | Cycle counter, GPIO, timed GPIO, input edge capture, host mailbox and IRQ. |
-| Wire Engines | `pg_wire.v`, `pg_fifo.v` | Two protocol-agnostic serial engines (section 4). |
+| Wire Engines | `pg_wire.v`, `pg_fifo.v` | Four protocol-agnostic serial engines: 0 and 1 full, 2 and 3 lite (section 4). |
 
 ## 2. Programming model
 
@@ -52,6 +52,8 @@ This is the universal fallback for protocols no engine fits: the 1-Wire master i
 ## 4. Wire Engines
 
 A Wire Engine is a serial engine with no protocol in it. Protocols are parameter sets and a few lines of C in `protocol.h`.
+
+Engines 0 and 1 are full engines. Engines 2 and 3 are built with `FULL = 0` ("lite"): they lack line codes (NRZI, Manchester), bit stuffing, differential/SE0 output, packet framing options, CRC, TX word attributes and the timed auto-reply; those registers read 0. They keep the fractional bit period and RX resync, so UART, SPI, I2C, WS2812 and similar bit streams work on every engine; USB, 10BASE-T and CAN need engine 0 or 1. A full engine is about 116k um^2 after synthesis, a lite one about 80k.
 
 ```
  TX FIFO (4 x {attributes, length, 32-bit data})
@@ -99,13 +101,13 @@ Any engine can own any output pin; pins an engine does not own follow GPIO (and 
 | Item | Value | Evidence |
 |---|---|---|
 | Clock | 50 MHz rated (slow corner 1.08 V / 125 C); typical-corner slack suggests 60 MHz or more at room temperature | P&R |
-| Setup slack at 50 MHz | +2.61 ns slow corner, +7.87 ns typical; hold +0.10 ns fast corner | P&R (2026-11-12) |
-| Critical path | SRAM clock-to-output (7.75 ns slow corner) into the CPU fetch/decode | P&R |
-| Cell area | 26,657 cells, 389,589 um^2 after synthesis (flat; 41 % of it flip-flops) | synthesis |
-| Std-cell utilization | 44.6 % of the 8x4 tile (51.0 % with the SRAM) | P&R |
+| Setup slack at 50 MHz | +0.78 ns slow corner, +6.29 ns typical; hold +0.10 ns fast corner | P&R (2026-11-13) |
+| Critical path | Wire Engine 0 bit timer (`div` register) through the TX logic and pin mux to an output pin | P&R |
+| Cell area | 39,577 cells, 549,787 um^2 after synthesis (flat; 38 % of it flip-flops). A full engine is about 116k um^2, a lite one about 80k | synthesis |
+| Std-cell utilization | 61.6 % of the 8x4 tile (66.1 % with the SRAM) | P&R |
 | Sign-off | LVS clean, KLayout DRC clean, antenna clean, Tiny Tapeout precheck passes | P&R |
 
-The SRAM macro needs special care on the CMOS5L tile, whose power grid is a single layer of Metal4 stripes: every stripe must run the full tile height, and a stripe may only cross the macro on one of the macro's own Metal4 supply columns of the same net. A LibreLane step in this repository (`librelane_plugin_polyglot.py`, `flow/odb_sram_stripes.py`) moves the stripes that cross the macro onto supply columns and connects them to the standard-cell rails. Routing: the logic above the macro talks to the logic on its right only through Metal3 (the one horizontal signal layer), so the corner is the congestion hot spot; a 6 um cell-free halo around the macro and a 55 % placement density cut global-routing overflow from 642 to 143, after which detailed routing converges to zero violations. The approach follows Ken Pettit's IHP SRAM write-up; the code is our own.
+The SRAM macro needs special care on the CMOS5L tile, whose power grid is a single layer of Metal4 stripes: every stripe must run the full tile height, and a stripe may only cross the macro on one of the macro's own Metal4 supply columns of the same net. A LibreLane step in this repository (`librelane_plugin_polyglot.py`, `flow/odb_sram_stripes.py`) moves the stripes that cross the macro onto supply columns and connects them to the standard-cell rails. Routing: the logic above the macro talks to the logic on its right only through Metal3 (the one horizontal signal layer), so the corner is the congestion hot spot; a 6 um cell-free halo around the macro keeps tracks free at the corner. With four engines the placement density is 68 % (shorter wires), and global routing ends with almost no overflow (29); detailed routing converges to zero violations. The approach follows Ken Pettit's IHP SRAM write-up; the code is our own.
 
 ## 7. Credits
 

@@ -228,6 +228,10 @@ typedef struct {
 
 #define W0 ((pg_wire_t *)0x80000100u)
 #define W1 ((pg_wire_t *)0x80000200u)
+/* W2 and W3 are lite engines: no line codes, bit stuffing, differential output,
+ * CRC, TX attributes or auto-reply (USB, 10BASE-T and CAN need W0 or W1). */
+#define W2 ((pg_wire_t *)0x80000300u)
+#define W3 ((pg_wire_t *)0x80000400u)
 
 /* CTRL bits */
 #define WIRE_EN          (1u << 0)

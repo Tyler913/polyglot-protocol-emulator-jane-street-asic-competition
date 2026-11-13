@@ -118,8 +118,10 @@
  * Pins use the chip-wide numbering (0..7 uio, 8..13 uo, 16..20 ui). pin_in
  * is already synchronized to clk.
  *
- * FULL = 0 builds the engine without CTRL2 bit-level options, CRC and
- * auto-reply (registers read 0), for a smaller "lite" engine.
+ * FULL = 0 builds a smaller "lite" engine without line codes, bit stuffing,
+ * differential output, packet framing options, CRC, TX attributes and
+ * auto-reply (those registers read 0). The fractional bit period and RX
+ * resync stay.
  */
 
 `default_nettype none
