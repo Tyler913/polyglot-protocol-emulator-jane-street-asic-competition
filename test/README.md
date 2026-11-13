@@ -2,12 +2,15 @@
 
 cocotb tests that run real C firmware on the RTL. Each test builds its program from `sw/examples/` or `sw/tests/` with the
 RISC-V GCC on your `PATH` (`riscv-none-elf-gcc` by default), loads it over the host SPI port and checks the pins.
+Without a RISC-V GCC (as on the Tiny Tapeout CI runners) the tests use the prebuilt images in `firmware/`;
+`make -C ../sw prebuilt` refreshes them, and a test warns when a fresh build differs from the committed copy.
 Protocol behaviour is judged by independent peer models written from the protocol definitions, not from the RTL.
 
 ```sh
 pip install -r requirements.txt
 make -B                 # RTL simulation (Icarus Verilog)
-make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it to gate_level_netlist.v first)
+make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it to gate_level_netlist.v first);
+                        # runs test_boot, test_quad and test_uart by default
 ```
 
 | File | Purpose |

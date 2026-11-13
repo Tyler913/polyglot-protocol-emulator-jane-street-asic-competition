@@ -1,6 +1,7 @@
 # Build all example and test programs with a stock RISC-V GCC.
 #   make            -> build/<name>.elf / .bin / .lst for examples/<name> and tests/<name>
 #   make CROSS=...  -> use another toolchain prefix
+#   make prebuilt   -> also copy the .bin images to test/firmware/ (used when no toolchain)
 #
 # Default toolchain: xPack riscv-none-elf-gcc (any GCC with rv32ec/ilp32e multilib works).
 
@@ -37,8 +38,13 @@ $(BUILD)/%.bin: $(BUILD)/%.elf
 $(BUILD)/%.lst: $(BUILD)/%.elf
 	$(OBJDUMP) -d $< > $@
 
+# Copy the images into test/firmware/ (committed) so the testbench runs without a toolchain.
+prebuilt: $(foreach e,$(PROGRAMS),$(BUILD)/$(e).bin)
+	@mkdir -p ../test/firmware
+	cp $^ ../test/firmware/
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean
+.PHONY: all clean prebuilt
 .PRECIOUS: $(BUILD)/%.elf

@@ -3,6 +3,7 @@
 """Helpers to bring the chip up, load firmware and exchange data with it."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from .host import HostSpi
 from .pins import bit, ui_pins
 
 SW_DIR = Path(__file__).resolve().parents[2] / "sw"
+PREBUILT_DIR = Path(__file__).resolve().parents[1] / "firmware"
 CLK_NS = 20  # 50 MHz
 F_CPU = 50_000_000
 SHARED = 0x0F00  # PG_SHARED in protocol.h
@@ -21,10 +23,21 @@ HOST_IRQ = 6  # uo[6]
 
 
 def build_firmware(name):
-    """Build sw/{examples,tests}/<name> unless FIRMWARE_PREBUILT is set; return the image bytes."""
-    if not os.environ.get("FIRMWARE_PREBUILT"):
+    """Return the image bytes for sw/{examples,tests}/<name>.
+
+    With a RISC-V GCC on PATH (riscv-none-elf-gcc, or $CROSS + gcc) the image is
+    built from source. Without one (e.g. the Tiny Tapeout CI runners), or with
+    FIRMWARE_PREBUILT set, the committed copy in test/firmware/ is used instead;
+    `make -C sw prebuilt` refreshes those copies."""
+    cross = os.environ.get("CROSS", "riscv-none-elf-")
+    if not os.environ.get("FIRMWARE_PREBUILT") and shutil.which(cross + "gcc"):
         subprocess.run(["make", "-s", "-C", str(SW_DIR), f"build/{name}.bin"], check=True)
-    return (SW_DIR / "build" / f"{name}.bin").read_bytes()
+        image = (SW_DIR / "build" / f"{name}.bin").read_bytes()
+        prebuilt = PREBUILT_DIR / f"{name}.bin"
+        if prebuilt.exists() and prebuilt.read_bytes() != image:
+            cocotb.log.warning("test/firmware/%s.bin is stale: run `make -C sw prebuilt`", name)
+        return image
+    return (PREBUILT_DIR / f"{name}.bin").read_bytes()
 
 
 async def start(dut, clk_ns=CLK_NS):

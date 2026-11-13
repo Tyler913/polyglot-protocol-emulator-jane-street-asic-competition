@@ -15,6 +15,7 @@ results.xml
 runs/
 *.elf
 *.bin
+!test/firmware/*.bin
 *.hex
 *.map
 
