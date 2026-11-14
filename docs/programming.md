@@ -138,5 +138,8 @@ The program, its data and a 256-byte stack share 3.5 KB (the top 256 bytes are t
 | I2C | `i2c_init`, `i2c_start`, `i2c_stop`, `i2c_write`, `i2c_read`, `WIRE_I2C_TARGET` |
 | USB low speed | `usb_ls_init`, `usb_send_data`, `usb_queue_handshake`, `usb_crc5`, `USB_PID_*`, `USB_MATCH_*` |
 | 10BASE-T | `eth_init`, `eth_send` |
+| CAN 2.0A | `can_init`, `can_send`, `can_recv`, `can_recv_ack` (receiver ACK), `can_parse`, `can_frame_t` |
+| SWD, JTAG | `WIRE_SWD`, `swd_connect`, `swd_xfer`, `SWD_REQ`; `WIRE_JTAG`, `jtag_tms`, `jtag_shift`, `JTAG_*` TMS sequences |
+| Several protocols at once | `pt.h`: `PT_BEGIN`, `PT_WAIT`, `PT_YIELD`, `PT_END` (cooperative tasks); `job.h`: queue jobs (`JOB_ENTRY`, slots, mailbox) |
 
 The register-level description of every block is in the header comments of `src/pg_sysio.v`, `src/pg_io.v` and `src/pg_wire.v`.

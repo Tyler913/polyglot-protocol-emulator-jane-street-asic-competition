@@ -45,10 +45,10 @@ Independent models catch mistakes in both the RTL and the test itself. Examples 
 
 ## Gate level and sign-off
 
-- P&R sign-off of the full design (four engines): LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners (+2.50 ns setup slack at the slow corner), Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-13)*.
-- Gate-level simulation of the routed netlist (`make -C test GATES=yes`, Icarus 13 with the IHP cell and SRAM models): SPI load and read-back, `memtest`, `blink`, host access while the CPU keeps the SRAM busy, all three UART tests and the four-engine `test_quad` pass *(gate-level simulation, local and in the Tiny Tapeout GDS workflow, 2026-11-13)*. `test_tgpio` reads the RTL's cycle counter by name and is skipped at gate level.
+- P&R sign-off of the full design (four engines): LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners (+2.50 ns setup slack at the slow corner), Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-14; the official Tiny Tapeout GDS workflow on GitHub also passed GDS, precheck and gate-level tests on the earlier revisions, 2026-11-13 and 2026-11-14)*.
+- Gate-level simulation of the routed netlist (`make -C test GATES=yes`, Icarus 13 with the IHP cell and SRAM models): SPI load and read-back, `memtest`, `blink`, host access while the CPU keeps the SRAM busy, all three UART tests, the four-engine `test_quad`, the three CAN tests (including the receiver ACK) and the SWD host pass *(gate-level simulation, local and in the Tiny Tapeout GDS workflow, 2026-11-14)*. `test_tgpio` reads the RTL's cycle counter by name and is skipped at gate level.
 - What gate level found: registers that a program never writes are X in simulation; a speculative register read let that X spread through the pipeline and stopped the CPU (silicon would just hold a random, unused value). The startup code now clears every register (22 bytes), and the CPU clears x0's register-file entry in reset.
 
 ## FPGA
 
-Planned: the same RTL and firmware on a Zynq UltraScale+ board, against real devices. *(pending)*
+The same RTL builds for an AMD Zynq UltraScale+ board (ALIENTEK DFZU2EG, `fpga/`): the SRAM macro becomes a block RAM with the same read timing, the chip's 24 pins go to a 3.3 V header, and an FPGA-only UART bridge lets a PC be the host. The whole chip takes 11 % of the FPGA's LUTs and meets 50 MHz with 12 ns of setup slack *(FPGA place and route, Vivado 2025.2)*. The bridge is simulated with the chip RTL: a program is loaded, read back and run, and a counter is read while the CPU runs *(RTL simulation)*. Running it on the board, against real devices, is still to do.
