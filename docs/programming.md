@@ -78,6 +78,8 @@ for (i = 1; i <= n; i++) wire_putn(DMX, 11, 0x600u | (level[i] << 1));
 
 A receiver model written from ANSI E1.11 checks the timing (`test/test_dmx512.py`).
 
+**Infrared remote** (`sw/examples/ir_nec`): an NEC remote control needs a 38 kHz carrier switched on and off in 562.5 us steps. No carrier generator is needed: at 76 kbit/s (fractional divider: 657 + 228/256 cycles per bit) a mark is the bit pattern `1010...` and a space is zeros, so the modulated waveform is plain pushes, and the receiver model sees a clean 38.000 kHz carrier (`test/test_ir_nec.py`).
+
 **ARM Serial Wire Debug** (`sw/examples/swd`, `swd_xfer` in `protocol.h`): one bidirectional data line (SWDIO) with a turnaround cycle each time the direction changes. The engine has no half-duplex mode for this, and needs none: SWCLK is the bit clock in SPI mode 0, SWDIO is both the TX and the RX pin, and at each turnaround the C code waits for the last bit and rewrites `CTRL` to switch the TX driver off and RX on (or back). SWD lets the clock stop between phases, so the pause costs nothing:
 
 ```c

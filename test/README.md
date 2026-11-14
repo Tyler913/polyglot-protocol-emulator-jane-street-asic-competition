@@ -30,11 +30,12 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `test_can.py` | CAN 2.0A at 500 kbit/s against a CAN bus model with a second node: stuffing, CRC-15, ACK, and lost arbitration followed by a retry; the chip as a receiver acknowledges good frames (ACK timing and ACK delimiter checked) and not a frame with a bad CRC |
 | `test_dmx512.py` | DMX512 lighting controller from a plain engine stream (BREAK + MAB as one 26-bit word, 11-bit slots), checked against E1.11 transmitter timing; 16 and 512 channels |
 | `test_ps2.py` | PS/2 host on a lite engine clocked by the keyboard: reads frames, sends commands (inhibit, request to send, device ACK), against a keyboard model with timing checks |
+| `test_ir_nec.py` | NEC infrared remote: 38 kHz carrier synthesized as a 76 kbit/s bit stream, frame and repeat code, checked by a demodulating receiver model (slow: about 20 minutes, not in the default list) |
 | `test_swd.py` | ARM Serial Wire Debug host on a lite engine against an SW-DP + MEM-AP model: JTAG-to-SWD switch, DPIDR, power-up, FAULT/ABORT, WAIT retries, memory write/read through TAR/DRW; contention and edge timing checks |
 | `test_jtag.py` | JTAG host (lite engine for TCK/TDI/TDO, TMS from C between pushes) against a two-device TAP chain model: IDCODEs, IR capture, BYPASS count, user data register write/read; TMS/TDI setup and hold checks |
 | `test_quad.py` | all four engines as UARTs at 1 Mbaud at the same time |
 | `test_mixed.py` | CAN, SPI, UART and I2C at the same time, one per engine, as cooperative C tasks (`sw/include/pt.h`) |
 | `test_queue.py` | job queue: eight protocol jobs in two waves of four, each loaded into its slot by the host while the other slots run (`sw/tests/queue`, `sw/jobs/`) |
-| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py`, `lib/ws2812.py`, `lib/onewire.py`, `lib/can.py`, `lib/swd.py`, `lib/jtag.py`, `lib/dmx512.py`, `lib/ps2.py` | independent UART, SPI, I2C, USB LS, 10BASE-T, WS2812, 1-Wire, CAN, SWD, JTAG, DMX512 and PS/2 peer models; open-drain and USB bus models for the uio pins |
+| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py`, `lib/ws2812.py`, `lib/onewire.py`, `lib/can.py`, `lib/swd.py`, `lib/jtag.py`, `lib/dmx512.py`, `lib/ps2.py`, `lib/ir_nec.py` | independent UART, SPI, I2C, USB LS, 10BASE-T, WS2812, 1-Wire, CAN, SWD, JTAG, DMX512, PS/2 and NEC infrared peer models; open-drain and USB bus models for the uio pins |
 | `lib/pins.py` | shared driver for `ui_in` (several models drive different bits) |
 | `tb.v` | testbench wrapper around the top level |
