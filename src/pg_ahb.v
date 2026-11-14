@@ -76,9 +76,11 @@ module pg_ahb (
   reg [2:0]  dp_size;
   reg        wr_done;  // the data-phase SRAM write was already performed
   reg        io_done;  // the register slave accepted the access last cycle
-  reg [31:0] io_rdata; // its read data, returned in the following cycle
+  reg [31:0] alt_d;    // register read data, or a held SRAM word (see below)
 
   wire dp_sram_write = dp_sram && dp_write;
+  wire dp_sram_read  = dp_sram && !dp_write;
+  reg  hold_v;        // alt_d holds an SRAM word (see the read data mux below)
   wire wr_now        = dp_sram_write && !wr_done;
   wire ap_sram_read  = ap_sram && !hwrite;
 
@@ -104,13 +106,21 @@ module pg_ahb (
       dp_size  <= 3'd0;
       wr_done  <= 1'b0;
       io_done  <= 1'b0;
-      io_rdata <= 32'd0;
+      alt_d    <= 32'd0;
+      hold_v   <= 1'b0;
     end else begin
       if (reg_valid && reg_ready) begin
         io_done  <= 1'b1;
-        io_rdata <= reg_rdata;
+        alt_d    <= reg_rdata;
       end else if (hready) begin
         io_done  <= 1'b0;
+      end
+      // Hold the SRAM word when a host access stretches a CPU read data phase
+      if (hready) begin
+        hold_v   <= 1'b0;
+      end else if (dp_sram_read && !hold_v) begin
+        hold_v   <= 1'b1;
+        alt_d    <= sram_rdata;
       end
       if (hready) begin
         dp_sram  <= ap_sram;
@@ -195,22 +205,12 @@ module pg_ahb (
 
   // A host access can stretch the data phase of a CPU SRAM read by one cycle
   // (stall_host); the SRAM output changes meanwhile, so the read word is held.
-  wire dp_sram_read = dp_sram && !dp_write;
-  reg        hold_v;
-  reg [31:0] hold_d;
-  always @(posedge clk) begin
-    if (rst) begin
-      hold_v <= 1'b0;
-      hold_d <= 32'd0;
-    end else if (hready) begin
-      hold_v <= 1'b0;
-    end else if (dp_sram_read && !hold_v) begin
-      hold_v <= 1'b1;
-      hold_d <= sram_rdata;
-    end
-  end
-
-  assign hrdata = dp_io ? io_rdata : hold_v ? hold_d : sram_rdata;
+  // It is held in alt_d, the register that otherwise carries register-port read
+  // data: the two never overlap (a hold happens only in an SRAM read data phase).
+  // So the SRAM output reaches the CPU through one 2-input mux with a registered
+  // select, as before; this path is the slow-corner critical path.
+  wire alt_sel = dp_io || hold_v;   // both registered
+  assign hrdata = alt_sel ? alt_d : sram_rdata;
 
   wire _unused = &{1'b0, dp_addr[31:12], htrans[0], dp_size[2], host_addr[15:12]};
 
