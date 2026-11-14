@@ -76,3 +76,26 @@ async def test_blink(dut):
     # Software deadlines accumulate (t += 100), so there is no long-term drift.
     total = edges[-1] - edges[0]
     assert abs(total - 800) <= 20, f"8 half-periods took {total} cycles, expected ~800"
+
+
+@cocotb.test()
+async def test_host_while_busy(dut):
+    """The host reads and writes SRAM while the CPU keeps the SRAM port busy
+    (sw/tests/busy): every byte must land and read back. Before the fix the
+    host only got idle SRAM cycles and could lose bytes under load."""
+    image = build_firmware("busy")
+    await reset(dut)
+    host = HostSpi(dut)
+    await host.write(0x0000, image)
+    await host.write(0x0F00, bytes(4))
+    await host.ctrl(0x01)
+    await ClockCycles(dut.clk, 500)
+    pattern = bytes((i * 73 + 5) & 0xFF for i in range(256))
+    await host.write(0x0800, pattern)
+    back = await host.read(0x0800, len(pattern))
+    n1 = int.from_bytes(await host.read(0x0F00, 4), "little")
+    await ClockCycles(dut.clk, 200)
+    n2 = int.from_bytes(await host.read(0x0F00, 4), "little")
+    bad = [i for i in range(256) if back[i] != pattern[i]]
+    assert not bad, f"{len(bad)} bytes wrong, first at 0x{0x800 + bad[0]:x}"
+    assert n2 > n1 > 0, f"CPU loop counter {n1} -> {n2}: the CPU must keep running"

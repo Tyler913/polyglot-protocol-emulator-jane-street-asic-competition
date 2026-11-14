@@ -10,8 +10,12 @@
  *     and the ready flag are registered here: every register access takes one
  *     extra cycle, and the slave's decode/ready logic never reaches the CPU
  *     in the same cycle (it was the slow-corner critical path at 50 MHz),
- *   - the host SPI loader, which owns the SRAM while the CPU is halted and
- *     otherwise only uses cycles in which the CPU leaves the SRAM idle.
+ *   - the host SPI loader, which owns the SRAM while the CPU is halted. While
+ *     the CPU runs, a host byte access has priority over a CPU SRAM read
+ *     (the CPU waits one cycle; only a pending CPU write goes first), so every
+ *     host byte is served within two cycles. Earlier the host only used idle
+ *     SRAM cycles, and a busy CPU could hold it off for longer than one SPI
+ *     byte: the host port then dropped the byte (found by the job-queue test).
  *
  * SRAM writes happen in the AHB data phase. If a read address phase arrives
  * in the same cycle, the fabric stalls one cycle (the single SRAM port can
@@ -78,11 +82,18 @@ module pg_ahb (
   wire wr_now        = dp_sram_write && !wr_done;
   wire ap_sram_read  = ap_sram && !hwrite;
 
+  // Host byte access: anytime the CPU is halted; while it runs, unless the
+  // data-phase CPU write needs the port this cycle.
+  reg  host_busy;     // host access issued last cycle; ack now
+  wire host_go = host_req && !host_busy && (cpu_halted || !wr_now);
+
   // Stall when the pending write and a new SRAM read compete for the port,
-  // or when the register slave is not ready.
+  // when the host takes the port from a new SRAM read, or when the register
+  // slave is not ready.
   wire stall_sram = wr_now && ap_sram_read;
+  wire stall_host = !cpu_halted && host_go && ap_sram_read;
   wire stall_io   = dp_io && !io_done;
-  assign hready   = !stall_sram && !stall_io;
+  assign hready   = !stall_sram && !stall_host && !stall_io;
 
   always @(posedge clk) begin
     if (rst) begin
@@ -127,10 +138,7 @@ module pg_ahb (
   // ---------------------------------------------------------------------
   // SRAM port
   // ---------------------------------------------------------------------
-  reg  host_busy;     // host access issued last cycle; ack now
   reg  [1:0] host_lane;
-  wire cpu_uses_sram = wr_now || (ap_sram_read && hready);
-  wire host_go       = host_req && !host_busy && (cpu_halted || !cpu_uses_sram);
 
   always @(*) begin
     sram_en    = 1'b0;
@@ -144,9 +152,6 @@ module pg_ahb (
       sram_addr  = dp_addr[11:2];
       sram_wdata = hwdata;
       sram_wmask = {{8{dp_strb[3]}}, {8{dp_strb[2]}}, {8{dp_strb[1]}}, {8{dp_strb[0]}}};
-    end else if (!cpu_halted && ap_sram_read && hready) begin
-      sram_en    = 1'b1;
-      sram_addr  = haddr[11:2];
     end else if (host_go) begin
       sram_en    = 1'b1;
       sram_we    = host_we;
@@ -154,6 +159,9 @@ module pg_ahb (
       sram_wdata = {4{host_wdata}};
       sram_wmask = {{8{host_addr[1:0] == 2'd3}}, {8{host_addr[1:0] == 2'd2}},
                     {8{host_addr[1:0] == 2'd1}}, {8{host_addr[1:0] == 2'd0}}};
+    end else if (!cpu_halted && ap_sram_read && hready) begin
+      sram_en    = 1'b1;
+      sram_addr  = haddr[11:2];
     end
   end
 
@@ -185,7 +193,24 @@ module pg_ahb (
   assign reg_addr  = dp_addr[11:0];
   assign reg_wdata = hwdata;
 
-  assign hrdata = dp_io ? io_rdata : sram_rdata;
+  // A host access can stretch the data phase of a CPU SRAM read by one cycle
+  // (stall_host); the SRAM output changes meanwhile, so the read word is held.
+  wire dp_sram_read = dp_sram && !dp_write;
+  reg        hold_v;
+  reg [31:0] hold_d;
+  always @(posedge clk) begin
+    if (rst) begin
+      hold_v <= 1'b0;
+      hold_d <= 32'd0;
+    end else if (hready) begin
+      hold_v <= 1'b0;
+    end else if (dp_sram_read && !hold_v) begin
+      hold_v <= 1'b1;
+      hold_d <= sram_rdata;
+    end
+  end
+
+  assign hrdata = dp_io ? io_rdata : hold_v ? hold_d : sram_rdata;
 
   wire _unused = &{1'b0, dp_addr[31:12], htrans[0], dp_size[2], host_addr[15:12]};
 
