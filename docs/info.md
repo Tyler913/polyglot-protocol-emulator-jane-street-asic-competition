@@ -13,9 +13,9 @@ Polyglot is a protocol emulator that you program in plain C. A Hazard3 RISC-V co
 Two kinds of hardware give the C program exact timing:
 
 - **Timed GPIO**: `pin_out_at(pin, value, t)` queues a pin change that the hardware applies in exactly clock cycle `t`, however long the C code took to get there. Input edges can be timestamped the same way. Any protocol can be bit-banged with cycle-exact edges.
-- **Wire Engines** (4 in this version; engines 0 and 1 are full, engines 2 and 3 are "lite": no line codes, bit stuffing, differential output, CRC or timed auto-reply): protocol-agnostic serial engines with a shift register, an internal or external bit clock, TX/RX FIFOs with per-word length, output-enable and open-drain control, clock stretching in both directions, chip-select or START/STOP framing with frame events, and arbitration detect. Reading an empty RX FIFO or writing a full TX FIFO simply stalls the CPU until the engine is ready. UART, SPI and I2C (controller and target for each) are a few lines of parameters and C in `protocol.h`, not hardware blocks.
+- **Wire Engines** (4 in this version; engines 0 and 1 are full, engines 2 and 3 are "lite": no line codes, bit stuffing, differential output, CRC or timed auto-reply, including the in-packet reply used for the CAN ACK): protocol-agnostic serial engines with a shift register, an internal or external bit clock, TX/RX FIFOs with per-word length, output-enable and open-drain control, clock stretching in both directions, chip-select or START/STOP framing with frame events, and arbitration detect. Reading an empty RX FIFO or writing a full TX FIFO simply stalls the CPU until the engine is ready. UART, SPI and I2C (controller and target for each) are a few lines of parameters and C in `protocol.h`, not hardware blocks.
 
-Status: CPU, SRAM, host loader, timed GPIO, edge capture and the Wire Engines pass RTL simulation with C firmware for UART, SPI, I2C (both roles each), USB low-speed HID keyboard, 10BASE-T transmit, CAN 2.0A, JTAG, ARM SWD, WS2812, 1-Wire, four UARTs at once and four different protocols at once, judged by independent peer models (33 tests). A gate-level simulation of the routed netlist boots C programs from the SRAM.
+Status: CPU, SRAM, host loader, timed GPIO, edge capture and the Wire Engines pass RTL simulation with C firmware for UART, SPI, I2C (both roles each), USB low-speed HID keyboard, 10BASE-T transmit, CAN 2.0A, JTAG, ARM SWD, WS2812, 1-Wire, four UARTs at once and four different protocols at once, judged by independent peer models (34 tests). A gate-level simulation of the routed netlist boots C programs from the SRAM.
 
 ### Host interface (SPI target, mode 0, SCK <= clk/8)
 
@@ -48,7 +48,7 @@ SPI: `sw/build/spi_ram.bin` drives SCK on uo[2], MOSI on uo[3], CS_N on uo[4] an
 
 USB low speed: `sw/build/usb_hid.bin` is a USB HID boot keyboard (D- uio[4], D+ uio[5], 1.5 kOhm pull-up on D-, series resistors / level shifting to 3.3 V USB levels as usual). After enumeration it types "Hi", then whatever arrives on its UART (ui[0], 115200 baud): a serial-to-USB keyboard.
 
-CAN: `sw/tests/can` shows CAN 2.0A at 500 kbit/s (TXD on uio[0], RXD on ui[2], through a CAN transceiver).
+CAN: `sw/tests/can` shows CAN 2.0A at 500 kbit/s (TXD on uio[0], RXD on ui[2], through a CAN transceiver): sending with arbitration and retry; `sw/tests/can_rx` receives and acknowledges frames (ACK slot driven only when the CRC checks).
 
 Protocols without hardware support: `sw/build/ws2812.bin` drives WS2812 LEDs on uo[3] from a plain engine bit stream; `sw/build/onewire.bin` is a 1-Wire master on uio[6] made only from timed GPIO.
 

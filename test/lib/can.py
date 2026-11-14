@@ -32,13 +32,13 @@ def crc15(bits):
     return c
 
 
-def frame_bits(fid, data):
-    """Unstuffed SOF..CRC bits of a standard data frame."""
+def frame_bits(fid, data, bad_crc=False):
+    """Unstuffed SOF..CRC bits of a standard data frame (bad_crc: last CRC bit flipped)."""
     bits = [0] + [(fid >> (10 - i)) & 1 for i in range(11)] + [0, 0, 0]
     bits += [(len(data) >> (3 - i)) & 1 for i in range(4)]
     for x in data:
         bits += [(x >> (7 - i)) & 1 for i in range(8)]
-    c = crc15(bits)
+    c = crc15(bits) ^ (1 if bad_crc else 0)
     return bits + [(c >> (14 - i)) & 1 for i in range(15)]
 
 
@@ -64,6 +64,7 @@ class CanBus:
         self.level = 1
         self.t = 0
         self.ui.set(rxd_ui, 1)
+        self.chip_edges = []  # (t, level) of the chip's TXD
 
     def add(self, node):
         self.nodes.append(node)
@@ -80,6 +81,9 @@ class CanBus:
             await FallingEdge(self.dut.clk)
             self.t += 1
             lvl = bit(self.dut.uio_out, self.txd) if bit(self.dut.uio_oe, self.txd) else 1
+            if lvl != getattr(self, "_chip_prev", 1):
+                self.chip_edges.append((self.t, lvl))
+                self._chip_prev = lvl
             for n in self.nodes:
                 lvl &= n.tx
             self.level = lvl
@@ -97,14 +101,19 @@ class CanNode:
         self.errors = []
         self.pending = None  # (id, data) to send
         self.join_sof = False
+        self.bad_crc = False
+        self.ack_slots = []  # expected start of each ACK slot (this node's timing at the CRC delimiter)
         self._reset_rx()
         self.idle_bits = 11
         self.prev = 1
         self.next_sample = None
 
-    def send(self, fid, data, join_sof=True):
+    def send(self, fid, data, join_sof=True, bad_crc=False):
+        """Queue one frame: join the next SOF on the bus (join_sof), or start
+        it after 11 idle bits."""
         self.pending = (fid, list(data))
         self.join_sof = join_sof
+        self.bad_crc = bad_crc
 
     def _reset_rx(self):
         self.state = "idle"
@@ -122,7 +131,7 @@ class CanNode:
                 self.raw, self.run, self.last = [], 0, None
                 self.bitstart = t
                 if self.pending and self.join_sof:          # start our frame on this SOF
-                    self.tx_bits = stuff(frame_bits(*self.pending))
+                    self.tx_bits = stuff(frame_bits(*self.pending, self.bad_crc))
                     self.txi = 1
                     self.tx = 0                              # drive our own SOF too
                     self.sending = self.pending
@@ -138,6 +147,13 @@ class CanNode:
             if (t - getattr(self, "idle_mark", 0)) >= self.bit:
                 self.idle_mark = t
                 self.idle_bits = self.idle_bits + 1 if lvl else 0
+            if self.pending and not self.join_sof and self.idle_bits >= 11 and lvl:
+                self.state = "frame"                          # start our own frame: SOF
+                self.raw, self.run, self.last = [], 0, None
+                self.bitstart = t
+                self.tx_bits = stuff(frame_bits(*self.pending, self.bad_crc))
+                self.txi = 1
+                self.tx = 0
             return
         pos = t - self.bitstart
         if pos >= round(self.bit):                       # next bit begins
@@ -183,11 +199,15 @@ class CanNode:
             if not lvl:
                 self.errors.append("CRC delimiter dominant")
             ok = crc15(self.raw[:end]) == 0
+            self.ack_slots.append(self.bitstart + round(self.bit))  # before any resync on the ACK edge
             if ok and self.tx_bits is None:
                 self.ack_drive = True                    # ACK in the next bit
             self.crc_ok = ok
         elif end and n == end + 2:                       # ACK slot
             self.acked = lvl == 0
+        elif end and n == end + 3:                       # ACK delimiter
+            if not lvl:
+                self.errors.append("ACK delimiter dominant (an ACK too long or too late)")
         elif end and n == end + 2 + 1 + 7:               # ACK delimiter + EOF
             fid = int("".join(map(str, self.raw[1:12])), 2)
             dlc = min(8, int("".join(map(str, self.raw[15:19])), 2))

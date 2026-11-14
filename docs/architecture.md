@@ -77,6 +77,7 @@ Engines 0 and 1 are full engines. Engines 2 and 3 are built with `FULL = 0` ("li
 | Per-word length and attributes (`TXATTR`): no-stuff, no-CRC, CRC init/append, SE0, send-after-RX | USB, Ethernet, I2C ACK slots |
 | NRZI, stuffing, CRC16, differential pair with SE0, packet RX until SE0 | USB low speed |
 | Auto-reply: a queued answer leaves TURN cycles after the end of a received packet that matches RXMATCH | USB handshakes and IN data within the 7.5-bit-time limit |
+| Reply inside a packet (`ACKBIT`): the answer leaves TURN cycles after RX decodes bit N, only if the RX CRC over the bits before it is zero | CAN receiver ACK (C sets N from the DLC in the first 32 bits) |
 | Manchester, CRC-32, idle tail (TP_IDL) | 10BASE-T transmit |
 | Arbitration by read-back (open drain or a separate RX pin), stuffing after five equal bits, CRC-15, end of frame by an idle run | CAN 2.0A |
 | Partial last word at a packet end (bit count in the end marker) | CAN frames of any length |
@@ -101,10 +102,10 @@ Any engine can own any output pin; pins an engine does not own follow GPIO (and 
 | Item | Value | Evidence |
 |---|---|---|
 | Clock | 50 MHz rated (slow corner 1.08 V / 125 C); typical-corner slack suggests 60 MHz or more at room temperature | P&R |
-| Setup slack at 50 MHz | +3.07 ns slow corner, +9.53 ns typical; hold +0.10 ns fast corner | P&R (2026-11-13) |
+| Setup slack at 50 MHz | +2.50 ns slow corner, +9.17 ns typical; hold +0.10 ns fast corner | P&R (2026-11-14) |
 | Critical path | SRAM clock-to-output (7.64 ns slow corner) into the CPU's fetch buffer | P&R |
-| Cell area | 39,716 cells, 552,034 um^2 after synthesis (flat; 39 % of it flip-flops). A full engine is about 116k um^2, a lite one about 80k | synthesis |
-| Std-cell utilization | 62.0 % of the 8x4 tile (66.4 % with the SRAM) | P&R |
+| Cell area | 39,499 cells, 551,828 um^2 after synthesis (flat; 39 % of it flip-flops). A full engine is about 116k um^2, a lite one about 80k | synthesis |
+| Std-cell utilization | 61.9 % of the 8x4 tile (66.3 % with the SRAM) | P&R |
 | Sign-off | LVS clean, KLayout DRC clean, antenna clean, Tiny Tapeout precheck passes | P&R |
 
 The SRAM macro needs special care on the CMOS5L tile, whose power grid is a single layer of Metal4 stripes: every stripe must run the full tile height, and a stripe may only cross the macro on one of the macro's own Metal4 supply columns of the same net. A LibreLane step in this repository (`librelane_plugin_polyglot.py`, `flow/odb_sram_stripes.py`) moves the stripes that cross the macro onto supply columns and connects them to the standard-cell rails. Routing: the logic above the macro talks to the logic on its right only through Metal3 (the one horizontal signal layer), so the corner is the congestion hot spot; a 6 um cell-free halo around the macro keeps tracks free at the corner. With four engines the placement density is 68 %, and global routing ends with no overflow. Placement turned out to be sensitive to where flip-flops sit on the output path: registering the pins after the pin mux made the placer's wire length 18 % worse and routing failed, while registering the same signals inside each engine improved it. Every SRAM input is driven by its own `buf_4` placed in `pg_sram.v`: the macro's inputs are characterized only up to 0.6 ns transition, and without these buffers some address bits arrived with 1.8 ns edges from small logic gates over long wires along the macro edge. Wire parasitics before routing: the CMOS5L flow configuration ships no fitted wire RC, so placement-time repair used the tech-LEF values (about 0.09 fF/um), half of what extraction later finds on this layout (0.18 fF/um median). Weak gates on long nets then passed repair and ended up with 3-4 ns edges. `src/config.json` sets `LAYERS_RC` to OpenROAD's fit for the same metal stack (from the SG13G2 configuration) and repairs once more after global routing; slow-corner slew warnings went from 42 to 11 (2 in the current layout) and capacitance warnings from 27 to 3, and setup slack improved. The approach to the power grid follows Ken Pettit's IHP SRAM write-up; the code is our own.

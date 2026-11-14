@@ -90,6 +90,7 @@ The example runs on a lite engine: it switches a debug port from JTAG to SWD, re
 | Open drain, clock stretching, START/STOP | engine, `WIRE_OE_OPEN_DRAIN`, `WIRE_CLK_OD`, `WIRE_CLK_WAIT`, `WIRE_GATE_I2C`, `WIRE_STRETCH` |
 | NRZI / Manchester, bit stuffing, CRC | engine `CTRL2` / `TXATTR` / `wire_crc()` |
 | An answer within a few bit times of a received packet | queue it with `WIRE_A_AFTER_RX`; the engine sends it `TURN` cycles after the matching packet (`RXMATCH`) |
+| An answer inside a packet, e.g. the CAN ACK slot | the same AFTER_RX word plus `ACKBIT = WIRE_ACK_AT(n)`: it leaves `TURN` cycles after RX bit n if the CRC checks (`can_recv_ack`) |
 | Pulse widths, odd timing, anything else | timed GPIO (`pin_out_at`, `pins_out_at`, `pin_oe_at`) and edge capture |
 | Several protocols at once | one engine each; `wait_events()` sleeps until any of them has data |
 

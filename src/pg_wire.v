@@ -93,9 +93,18 @@
  *   0x38 RXMATCH RW auto-reply filter: [7:0] value, [15:8] mask, [19:16]
  *                   word index k. A received packet triggers AFTER_RX words
  *                   only if (word k & mask) == (value & mask); mask 0 = any.
+ *   0x3C ACKBIT RW  [7:0] bit N, [8] ARM. While armed, when RX decodes bit N
+ *                   of the packet (1 = its first bit; stuff bits are not
+ *                   counted) and the RX CRC over bits 1..N-1 is zero (CRCINIT
+ *                   from the frame start, RX_SKIP applies), AFTER_RX words
+ *                   start TURN cycles later; a CRC mismatch sends nothing,
+ *                   and the end of an armed packet does not release them
+ *                   either. Disarms at bit N or at the packet end. This is
+ *                   a reply inside a packet: the CAN receiver ACK.
  *
  * AFTER_RX words wait for the end of a packet received after they were
- * pushed (pushing one cancels a pending trigger), then TURN cycles.
+ * pushed (pushing one cancels a pending trigger), then TURN cycles, or for
+ * ACKBIT. They are also sent after a lost arbitration (ARB_STOP).
  *   0x80 + 4*(n-1)  W  push a word of n bits (n = 1..32), whatever CTRL.LEN
  *
  * Bit timing, internal clock: each bit lasts DIV cycles. The TX line changes
@@ -159,7 +168,8 @@ module pg_wire #(
   localparam [3:0] R_TX = 4'd0, R_RX = 4'd1, R_STATUS = 4'd2, R_CTRL = 4'd3,
                    R_DIV = 4'd4, R_PINS = 4'd5, R_FLUSH = 4'd6, R_CTRL2 = 4'd7,
                    R_TXATTR = 4'd8, R_CRCCFG = 4'd9, R_CRCINIT = 4'd10,
-                   R_RXCRC = 4'd11, R_TURN = 4'd12, R_CRCPOLY = 4'd13, R_RXMATCH = 4'd14;
+                   R_RXCRC = 4'd11, R_TURN = 4'd12, R_CRCPOLY = 4'd13, R_RXMATCH = 4'd14,
+                   R_ACKBIT = 4'd15;
 
   localparam FW = 43;                     // TX FIFO entry: {attr[5:0], len-1[4:0], data[31:0]}
   wire full = (FULL != 0);
@@ -175,6 +185,9 @@ module pg_wire #(
   reg [31:0] poly;
   reg [15:0] turn;
   reg [19:0] rxmatch;
+  reg [7:0]  ack_n;      // ACKBIT: decoded RX bit that releases AFTER_RX words
+  reg        ack_arm;    // waiting for that bit
+  reg        ack_pkt;    // this packet uses ACKBIT (its end does not release AFTER_RX words)
   reg [15:0] div;
   reg [4:0]  txpin, rxpin, ckpin, gtpin;
 
@@ -307,6 +320,7 @@ module pg_wire #(
   wire        rx_pkt_end;
   wire        rx_start;
   reg         match_ok;      // the packet being received passes RXMATCH
+  wire        ack_fire;      // ACKBIT reached with a zero RX CRC residual
   wire        push_after = txf_push && full && txattr[5];
   reg  [15:0] turn_cnt;
   reg         turn_run, turn_go;
@@ -527,7 +541,7 @@ module pg_wire #(
       turn_run <= 1'b0;
       turn_go  <= 1'b0;
     end else begin
-      if (rx_pkt_end && match_ok) begin
+      if ((rx_pkt_end && match_ok && !ack_pkt) || ack_fire) begin
         turn_run <= 1'b1;
         turn_cnt <= 16'd0;
         turn_go  <= 1'b0;
@@ -557,7 +571,7 @@ module pg_wire #(
   reg        rlvl;          // previous sampled level (NRZI decode)
   reg [2:0]  rrun;          // run length for destuffing
   reg        rlast;         // previous decoded bit
-  reg [4:0]  rbits;         // decoded bits since the frame start (saturating), for RX_SKIP
+  reg [7:0]  rbits;         // decoded bits since the frame start (saturating), for RX_SKIP and ACKBIT
   reg [3:0]  rwidx;         // words completed in this packet (saturating), for RXMATCH
   reg [2:0]  irun;          // consecutive idle-level samples (EOF_RUN)
   reg [31:0] rcrc;
@@ -589,7 +603,7 @@ module pg_wire #(
   // DIFF links are half duplex: RX ignores the line while TX drives it.
   wire       rx_mute    = diff && tx_busy;
   assign     rx_start   = async_mode && !rx_busy && !rx_mute && (rx_in != idle) && (rx_prev == idle);
-  wire       rx_glitch  = async_mode && (rbits == 5'd0) && (rx_in == idle) && !se0_in;
+  wire       rx_glitch  = async_mode && (rbits == 8'd0) && (rx_in == idle) && !se0_in;
   wire       rx_sample  = async_mode ? (rx_busy && (rtmr == half))
                                      : (clk_ext ? ext_sample : int_samp_d);
   wire       rx_eof     = rx_packet && (eof_run != 3'd0) && (rx_in == idle) &&
@@ -598,6 +612,12 @@ module pg_wire #(
   wire       rx_data    = rx_sample && !rx_eop && !rx_glitch && !rx_is_stuf;
   wire       rx_last    = (rx_cnt == rx_len);
   assign     rx_pkt_end = rx_eop;
+
+  // ACKBIT: when decoded bit ack_n (1 = the first bit of the packet) is
+  // sampled and the RX CRC over the bits before it is zero, AFTER_RX words
+  // start TURN cycles later (a reply inside the packet: the CAN ACK slot).
+  wire       ack_hit    = full && ack_arm && rx_data && (rbits + 8'd1 == ack_n);
+  assign     ack_fire   = ack_hit && ((rcrc & crc_mask) == 32'd0);
 
   reg        end_pend;      // end marker still to push after a partial last word
   reg  [4:0] end_bits;
@@ -633,7 +653,7 @@ module pg_wire #(
       rlvl    <= 1'b1;
       rrun    <= 3'd0;
       rlast   <= 1'b1;
-      rbits   <= 5'd0;
+      rbits   <= 8'd0;
       rcrc    <= 32'd0;
       rwidx   <= 4'd0;
       irun    <= 3'd0;
@@ -647,7 +667,7 @@ module pg_wire #(
           rlvl  <= idle;
           rrun  <= 3'd0;
           rlast <= idle;
-          rbits <= 5'd0;
+          rbits <= 8'd0;
           rwidx <= 4'd0;
           irun  <= 3'd0;
           match_ok <= (rxmatch[15:8] == 8'd0);
@@ -684,8 +704,8 @@ module pg_wire #(
         end else begin
           rrun  <= rrun_n;
           rlast <= dbit;
-          if (rbits != 5'd31) rbits <= rbits + 5'd1;
-          if (full && rbits >= rx_skip) rcrc <= crc_step(rcrc, dbit, crc_lm1, poly, crc_mask);
+          if (rbits != 8'd255) rbits <= rbits + 8'd1;
+          if (full && rbits >= {3'd0, rx_skip}) rcrc <= crc_step(rcrc, dbit, crc_lm1, poly, crc_mask);
           if (rx_last) begin
             rx_sh   <= 32'd0;
             rx_cnt  <= 5'd0;
@@ -724,7 +744,9 @@ module pg_wire #(
   // ---------------------------------------------------------------------
   wire od       = (oe_mode == 2'd2);
   wire tx_shown = !gated || active;           // gated frames hide the TX line outside the frame
-  wire arb_off  = arb_stop && arb_lost;   // lost: send only the idle (recessive) level
+  // Lost arbitration: send only the idle (recessive) level, except in words
+  // that answer a received packet (AFTER_RX, e.g. the CAN ACK)
+  wire arb_off  = arb_stop && arb_lost && !tx_attr[5];
   wire drv_line = (tx_shown && !arb_off) ? line : idle;
 
   assign tx_pin = txpin;
@@ -793,6 +815,7 @@ module pg_wire #(
         R_TURN:    rdata = full ? {16'd0, turn} : 32'd0;
         R_CRCPOLY: rdata = full ? poly : 32'd0;
         R_RXMATCH: rdata = full ? {12'd0, rxmatch} : 32'd0;
+        R_ACKBIT:  rdata = full ? {23'd0, ack_arm, ack_n} : 32'd0;
         default:   rdata = 32'd0;
       endcase
     end
@@ -837,13 +860,30 @@ module pg_wire #(
     end
   end
 
+  // ACKBIT register: writing it arms the trigger for the packet being
+  // received; it disarms at that bit or at the end of the packet.
+  always @(posedge clk) begin
+    if (srst || !full) begin
+      ack_n   <= 8'd0;
+      ack_arm <= 1'b0;
+      ack_pkt <= 1'b0;
+    end else if (cfg_wr && ra == R_ACKBIT) begin
+      ack_n   <= wdata[7:0];
+      ack_arm <= wdata[8];
+      ack_pkt <= wdata[8];
+    end else begin
+      if (ack_hit || rx_pkt_end) ack_arm <= 1'b0;
+      if (rx_pkt_end)            ack_pkt <= 1'b0;
+    end
+  end
+
   // Read-back compare on words that are not NOSTUFF (CAN: the arbitration and
   // data fields; the ACK slot is in a NOSTUFF word, where a dominant bit is an
   // acknowledgement, not a lost arbitration)
   wire arb_check = (od || arb_stop) && tx_busy && !a_nostuff && line && !rx_in &&
                    (clk_ext ? ext_sample : int_sample);
 
-  wire _unused = &{1'b0, tx_attr[5], tx_attr[2]};   // CRC_INIT and AFTER_RX act at load time
+  wire _unused = &{1'b0, tx_attr[2]};   // CRC_INIT acts at load time
 
   always @(posedge clk) begin
     if (srst) begin

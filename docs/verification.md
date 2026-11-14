@@ -24,11 +24,11 @@
 | `test_swd` | `swd` | ARM SW-DP + MEM-AP target model written from the ADIv5 rules (`lib/swd.py`): JTAG-to-SWD selection, lockout until DPIDR is read, request parity, ACK, turnarounds, posted AP reads, FAULT before power-up and ABORT, WAIT retries; flags contention on SWDIO and data changes too close to the rising SWCLK edge. Run at 1 MHz (with WAIT answers) and 5 MHz. Checked against broken firmware: a missing turnaround, a wrong write parity and a host that keeps driving SWDIO through the ACK all fail the test |
 | `test_jtag` | `jtag` | IEEE 1149.1 chain model (`lib/jtag.py`): two devices with 16-state TAP controllers, IR capture (...01), IDCODE after reset, BYPASS, an 8-bit user register; checks TMS/TDI setup and hold around the rising TCK edge. Reads both IDCODEs, the captured IRs, counts the devices in BYPASS, writes the user register twice and reads the old values; 1 and 5 MHz |
 | `test_quad` | `quad_uart` | All four Wire Engines at once (two full, two lite) as UARTs at 1 Mbaud, each judged by its own UART model: banners, then all four receivers busy at the same time and every byte echoed |
-| `test_can` | `can` | CAN bus model (`lib/can.py`, wired-AND bus with transceiver delay) and a second controller node: stuffing, CRC-15, ACK; the node joins the chip's SOF with a lower identifier, the chip loses arbitration at identifier bit 5, receives the winner's frame and retries. Limitation: the chip does not yet drive the ACK slot as a receiver |
+| `test_can` | `can`, `can_rx` | CAN bus model (`lib/can.py`, wired-AND bus with transceiver delay) and a second controller node: stuffing, CRC-15, ACK; the node joins the chip's SOF with a lower identifier, the chip loses arbitration at identifier bit 5, receives and acknowledges the winner's frame and retries. As a receiver only, the chip acknowledges frames with 0, 3 and 8 data bytes and does not acknowledge a frame with a bad CRC; each ACK is one bit long, starts 7 cycles (7 % of a bit) after the slot start in the sending node's timing, and the ACK delimiter stays recessive |
 | `test_mixed` | `mixed4` | Four different protocols at once, one per engine, as four cooperative C tasks (`pt.h`): CAN (frame acknowledged by the bus model's node), SPI RAM write/read at 5 MHz, UART echo at 1 Mbaud and I2C EEPROM page write, ACK polling and read at 400 kHz. All four bus models run in the same simulation; the test also checks that the four tasks overlap in time |
 | `test_queue` | `queue` + `sw/jobs/*` | A resident kernel runs up to four protocol jobs, one per engine; the host model loads eight jobs in two waves (I2C EEPROM 100 kHz, CAN 500 kbit/s, SPI RAM, UART 115200; then CAN 250 kbit/s on other pins, WS2812, UART 1 Mbaud, a second EEPROM at 400 kHz), each into its slot while the other slots keep running. Seven bus models run in the same simulation; the test checks every result and that second-wave jobs ran while a first-wave job was still running |
 
-33 tests in all; they also run in GitHub Actions on every push.
+34 tests in all; they also run in GitHub Actions on every push.
 
 ## What the models found
 
@@ -43,7 +43,7 @@ Independent models catch mistakes in both the RTL and the test itself. Examples 
 
 ## Gate level and sign-off
 
-- P&R sign-off of the full design (four engines): LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners (+3.07 ns setup slack at the slow corner), Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-13)*.
+- P&R sign-off of the full design (four engines): LVS clean, KLayout DRC clean, antenna clean, setup/hold met at 50 MHz in all corners (+2.50 ns setup slack at the slow corner), Tiny Tapeout precheck passes *(P&R, local LibreLane run, 2026-11-13)*.
 - Gate-level simulation of the routed netlist (`make -C test GATES=yes`, Icarus 13 with the IHP cell and SRAM models): SPI load and read-back, `memtest`, `blink`, host access while the CPU keeps the SRAM busy, all three UART tests and the four-engine `test_quad` pass *(gate-level simulation, local and in the Tiny Tapeout GDS workflow, 2026-11-13)*. `test_tgpio` reads the RTL's cycle counter by name and is skipped at gate level.
 - What gate level found: registers that a program never writes are X in simulation; a speculative register read let that X spread through the pipeline and stopped the CPU (silicon would just hold a random, unused value). The startup code now clears every register (22 bytes), and the CPU clears x0's register-file entry in reset.
 

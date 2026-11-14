@@ -227,7 +227,8 @@ typedef struct {
     volatile uint32_t TURN;     /* auto-reply delay after a received packet, cycles */
     volatile uint32_t CRCPOLY;
     volatile uint32_t RXMATCH;  /* auto-reply only for packets whose word k matches */
-    uint32_t _pad[17];
+    volatile uint32_t ACKBIT;   /* auto-reply at RX bit N if the RX CRC checks (full engines) */
+    uint32_t _pad[16];
     volatile uint32_t TXN[32];  /* TXN[n-1] = x pushes an n-bit word */
 } pg_wire_t;
 
@@ -289,6 +290,10 @@ typedef struct {
 
 /* RXMATCH: only packets whose word k satisfies (word & mask) == value trigger AFTER_RX words */
 #define WIRE_MATCH(k, value, mask) ((((uint32_t)(k) & 15u) << 16) | (((uint32_t)(mask) & 0xFFu) << 8) | ((uint32_t)(value) & 0xFFu))
+
+/* ACKBIT: AFTER_RX words start TURN cycles after RX decodes bit n of the packet
+ * (1 = its first bit, stuff bits not counted), if the RX CRC over bits 1..n-1 is zero */
+#define WIRE_ACK_AT(n)   (((uint32_t)(n) & 0xFFu) | (1u << 8))
 
 /* CRC unit: width 1..32, polynomial without the top bit; TX appends it MSB first */
 static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t init, int xorout, int rx_skip)
@@ -908,6 +913,43 @@ static inline int can_parse(const uint32_t *words, uint32_t nw, uint32_t end_mar
     f->acked  = (uint8_t)!((words[(end + 16u) >> 5] >> (31u - ((end + 16u) & 31u))) & 1u);  /* ACK slot */
     return 0;
 }
+
+/* Receiver ACK, armed from the first 32 bits of a frame (they hold the DLC):
+ * a dominant bit queued as an AFTER_RX word goes out at the ACK slot, half a
+ * bit after the CRC delimiter is sampled, only if the CRC checks (ACKBIT).
+ * Not for our own frame; after a lost arbitration the rest of ours is dropped. */
+static inline void can_ack_arm(pg_wire_t *w, uint32_t word0)
+{
+    uint32_t st = w->STATUS, dlc = (word0 >> 13) & 15u;
+    if (dlc > 8u) dlc = 8u;
+    if (st & WIRE_TX_ACTIVE) {
+        if (!(st & WIRE_ARB_LOST)) return;        /* our own frame */
+        wire_tx_discard(w);
+    }
+    w->TURN   = (w->DIV >> 1) - 4u;               /* delimiter sample -> ACK slot start */
+    w->TXATTR = WIRE_A_AFTER_RX | WIRE_A_NOSTUFF | WIRE_A_NOCRC;
+    wire_putn(w, 1, 0u);
+    w->TXATTR = 0;
+    w->ACKBIT = WIRE_ACK_AT(35u + 8u * dlc);      /* SOF..DLC 19, data, CRC 15, delimiter */
+}
+
+/* Receive one frame (blocks). ack = 1: acknowledge frames from other nodes
+ * (full engines). Returns 0, or -1 if the frame was too short. */
+static inline int can_recv_opt(pg_wire_t *w, can_frame_t *f, int ack)
+{
+    uint32_t words[4], nw = 0, w32;
+    for (;;) {                                      /* destuffed bits, MSB first, 32 per word */
+        w32 = wire_get(w);
+        if (WIRE_IS_END(w32)) break;
+        if (ack && nw == 0) can_ack_arm(w, w32);
+        if (nw < 4) words[nw] = w32;
+        nw++;
+    }
+    if (ack && WIRE_TX_LEVEL(w->STATUS)) wire_tx_discard(w);   /* CRC bad: the ACK stayed queued */
+    return can_parse(words, nw, w32, f);
+}
+
+static inline int can_recv_ack(pg_wire_t *w, can_frame_t *f) { return can_recv_opt(w, f, 1); }
 
 /* Receive one frame (blocks). Returns 0, or -1 if the frame was too short. */
 static inline int can_recv(pg_wire_t *w, can_frame_t *f)

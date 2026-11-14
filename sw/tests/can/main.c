@@ -34,7 +34,7 @@ int main(void)
         CAN->STATUS = WIRE_ARB_LOST;                 /* clear */
         can_send(CAN, 0x123, msg, 4);
         for (;;) {                                   /* every frame on the bus, ours included */
-            if (can_recv(CAN, &f) < 0) continue;
+            if (can_recv_ack(CAN, &f) < 0) continue;
             if (f.id == 0x123) break;                /* our own frame went out */
             PG_SHARED[3]++;
             PG_SHARED[4] = f.id;

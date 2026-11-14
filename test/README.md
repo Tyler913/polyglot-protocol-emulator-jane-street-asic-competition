@@ -27,7 +27,7 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `test_eth.py` | 10BASE-T transmit at a 40 MHz clock: Manchester, differential TD+/TD-, preamble/SFD, CRC-32 FCS checked with zlib |
 | `test_ws2812.py` | WS2812 LEDs from a plain NRZ engine stream (3 line bits per LED bit), checked against datasheet pulse timing |
 | `test_onewire.py` | 1-Wire master from timed GPIO only (reset/presence, write and read slots), READ ROM from a DS18B20-style model with timing checks |
-| `test_can.py` | CAN 2.0A at 500 kbit/s against a CAN bus model with a second node: stuffing, CRC-15, ACK, and lost arbitration followed by a retry |
+| `test_can.py` | CAN 2.0A at 500 kbit/s against a CAN bus model with a second node: stuffing, CRC-15, ACK, and lost arbitration followed by a retry; the chip as a receiver acknowledges good frames (ACK timing and ACK delimiter checked) and not a frame with a bad CRC |
 | `test_swd.py` | ARM Serial Wire Debug host on a lite engine against an SW-DP + MEM-AP model: JTAG-to-SWD switch, DPIDR, power-up, FAULT/ABORT, WAIT retries, memory write/read through TAR/DRW; contention and edge timing checks |
 | `test_jtag.py` | JTAG host (lite engine for TCK/TDI/TDO, TMS from C between pushes) against a two-device TAP chain model: IDCODEs, IR capture, BYPASS count, user data register write/read; TMS/TDI setup and hold checks |
 | `test_quad.py` | all four engines as UARTs at 1 Mbaud at the same time |
