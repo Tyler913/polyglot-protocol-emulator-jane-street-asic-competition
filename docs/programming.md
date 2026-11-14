@@ -91,6 +91,8 @@ The example runs on a lite engine: it switches a debug port from JTAG to SWD, re
 
 **JTAG** (`sw/examples/jtag`, `jtag_tms` / `jtag_shift` in `protocol.h`) uses the same idea for its fourth wire: the engine clocks TDI out and TDO in on TCK, and TMS is a GPIO pin that C changes only while the clock is stopped, so it meets setup and hold by construction. A shift is one push; its last bit is pushed on its own so that TMS can rise with it. The example reads the IDCODEs of a two-device chain, puts one device in BYPASS and writes a data register in the other (`test/test_jtag.py`).
 
+**PS/2** (`sw/examples/ps2_host`): here the device makes the clock. The engine runs on the keyboard's CLK (`WIRE_CLK_EXT`), reading DATA on falling edges. To send a command, C holds CLK low for 120 us, pushes the 11-bit frame on an open-drain TX (its start bit pulls DATA low at once: the request to send) and releases CLK; the keyboard then clocks the frame in, and the engine moves to the next bit on each falling edge. Switching direction is again just a `wire_config` (`test/test_ps2.py`).
+
 ## 5. Choosing a mechanism
 
 | The protocol needs | Use |
