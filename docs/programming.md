@@ -87,6 +87,12 @@ Each engine runs on its own, so the CPU only has to keep the FIFOs fed. A simple
 - Inside a task, use only accesses that cannot stall the CPU: wait for `wire_rx_count(w) > 0` before `wire_get()`, and for `!(w->STATUS & WIRE_TX_ACTIVE)` instead of `wire_flush()`.
 - Keep every step short. The FIFOs are 4 words deep; four UART bytes at 1 Mbaud are 2000 cycles, so no task may run longer than that between waits.
 
+### A queue of protocol jobs
+
+More protocols than fit in memory at once can run as a queue (`sw/tests/queue`, `sw/include/job.h`, `sw/jobs/`). A 240-byte resident kernel calls up to four jobs round-robin, one per engine; each job is a cooperative task linked for its slot (slot 0 832 bytes, slot 1 768, slot 2 512, slot 3 1216), with 16 mailbox words for parameters and results. The host loads a job into a free slot over SPI and writes RUN into its mailbox; the other three slots keep running meanwhile (the host port takes one CPU cycle per byte). `test/test_queue.py` runs eight jobs this way in two waves of four: I2C, CAN, SPI and UART, then CAN at another rate, WS2812, UART at another rate and a second I2C EEPROM.
+
+Job sizes: UART echo 208 bytes, WS2812 454, SPI RAM 694, CAN send/receive 784, I2C EEPROM write/poll/read 1122. To fit, the host passes bit periods already computed (`can_init_fix8`, `WIRE_UART_8N1_FIX8`) so no divide routine is linked into each job, and each job points `gp` at its own data, which makes most static-variable accesses one instruction.
+
 ### Fitting in 4 KB
 
 The program, its data and a 256-byte stack share 3.5 KB (the top 256 bytes are the host mailbox). Measured sizes (code + data, GCC 15 `-Os`): UART echo 485 B, SPI RAM 674 B, I2C EEPROM 954 B, CAN 734 B, USB HID keyboard 1.9 KB, and all of CAN + SPI + UART + I2C as concurrent tasks 3.5 KB. The core has no multiply/divide unit, so avoid 64-bit arithmetic at run time: one 64-bit division pulls about 1.4 KB of libgcc into the image. `protocol.h` keeps its own helpers 32-bit.

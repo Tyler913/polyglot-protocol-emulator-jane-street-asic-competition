@@ -15,7 +15,7 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 
 | File | Purpose |
 |---|---|
-| `test_boot.py` | bring-up: SPI load/read-back, byte/halfword/word memory test, blink timing |
+| `test_boot.py` | bring-up: SPI load/read-back, byte/halfword/word memory test, blink timing, host access while the CPU keeps the SRAM busy |
 | `test_tgpio.py` | timed GPIO: every scheduled edge lands on its exact cycle; LATE flag, edge capture, blocking timeout |
 | `test_uart.py` | UART echo at 1 Mbaud (back to back) and 115200 baud; exact bit timing; framing error recovery |
 | `test_spi.py` | SPI controller against an SPI RAM model in modes 0-3 (1, 5 and 12.5 MHz with RX sample delay); SPI target with CS framing, frame events and an aborted frame (modes 0, 3) |
@@ -30,6 +30,7 @@ make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it t
 | `test_can.py` | CAN 2.0A at 500 kbit/s against a CAN bus model with a second node: stuffing, CRC-15, ACK, and lost arbitration followed by a retry |
 | `test_quad.py` | all four engines as UARTs at 1 Mbaud at the same time |
 | `test_mixed.py` | CAN, SPI, UART and I2C at the same time, one per engine, as cooperative C tasks (`sw/include/pt.h`) |
+| `test_queue.py` | job queue: eight protocol jobs in two waves of four, each loaded into its slot by the host while the other slots run (`sw/tests/queue`, `sw/jobs/`) |
 | `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py`, `lib/ws2812.py`, `lib/onewire.py`, `lib/can.py` | independent UART, SPI, I2C, USB LS, 10BASE-T, WS2812, 1-Wire and CAN peer models; open-drain and USB bus models for the uio pins |
 | `lib/pins.py` | shared driver for `ui_in` (several models drive different bits) |
 | `tb.v` | testbench wrapper around the top level |

@@ -123,6 +123,9 @@ class I2cEeprom:
         if rise:
             if self.phase in ("rx", "addr") and t - self.t_sda < self.setup_min:
                 self.errors.append(f"t={t}: chip changed SDA {t - self.t_sda} cycles before SCL rose (setup)")
+            if self.phase in ("ack_out", "nack_out") and self.bus._chip_low[self.sda]:
+                # The ACK slot after a byte the target received belongs to the target
+                self.errors.append(f"t={t}: controller pulled SDA low in the target's ACK slot")
             self._rise(sda)
         elif fall:
             self.t_fall = t

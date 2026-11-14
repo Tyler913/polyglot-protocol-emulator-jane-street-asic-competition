@@ -29,7 +29,7 @@ Polyglot is a protocol emulator that is programmed in plain C. Protocol knowledg
 |---|---|---|
 | CPU | `src/hazard3_*` | Hazard3 by Luke Wren (the RP2350 core), RV32EC with M-mode traps, vendored with one marked change (the never-written x0 register-file entry is cleared during reset, so gate-level simulation has no X from it). Runs C compiled with stock GCC or Clang. |
 | Memory | `pg_sram.v` | One IHP `RM_IHPSG13_1P_1024x32_c2_bm_bist` macro: 4 KB for code, data and stack. |
-| Fabric | `pg_ahb.v` | AHB-Lite: SRAM with zero read wait states; register window at 0x8000_0000 (one wait state per access: read data and ready are registered, which keeps the I/O decode off the CPU's critical path); host port that uses idle SRAM cycles. |
+| Fabric | `pg_ahb.v` | AHB-Lite: SRAM with zero read wait states; register window at 0x8000_0000 (one wait state per access: read data and ready are registered, which keeps the I/O decode off the CPU's critical path); host port: while the CPU runs, a host byte access takes priority over a CPU SRAM read (the CPU waits one cycle per host byte), so the host can load a program into one part of memory or read results while the CPU keeps running. |
 | Host port | `pg_host_spi.v` | SPI target (mode 0): WRITE/READ memory, CTRL (run), STATUS. |
 | I/O | `pg_io.v` | Address decode, two-flop input synchronizers, the blocking-access timeout, and the pinmux. |
 | System | `pg_sysio.v` | Cycle counter, GPIO, timed GPIO, input edge capture, host mailbox and IRQ. |

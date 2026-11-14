@@ -364,10 +364,12 @@ static inline void     wire_tx_discard(pg_wire_t *w)      { w->FLUSH = 1u; }   /
  * realigns on every edge, so odd rates like 3 Mbaud at 50 MHz work.
  */
 
-#define WIRE_UART_8N1(tx_pin, rx_pin, baud) ((wire_cfg_t){                      \
+#define WIRE_UART_8N1(tx_pin, rx_pin, baud) WIRE_UART_8N1_FIX8(tx_pin, rx_pin, PG_BIT_FIX8(baud))
+
+/* The same with the bit period already in 1/256 cycles (PG_BIT_FIX8), e.g. from the host. */
+#define WIRE_UART_8N1_FIX8(tx_pin, rx_pin, fix8) ((wire_cfg_t){                 \
     WIRE_EN | WIRE_TX | WIRE_RX | WIRE_IDLE_HIGH | WIRE_RX_ASYNC | WIRE_LEN(10), \
-    PG_BIT_FIX8(baud) >> 8, WIRE_PINS(tx_pin, rx_pin, 0),                     \
-    WIRE_FRAC(PG_BIT_FIX8(baud)) | WIRE_RESYNC })
+    (fix8) >> 8, WIRE_PINS(tx_pin, rx_pin, 0), WIRE_FRAC(fix8) | WIRE_RESYNC })
 
 static inline void uart_putc(pg_wire_t *w, uint8_t b) { w->TX = 0x200u | ((uint32_t)b << 1); }
 
@@ -681,17 +683,23 @@ static inline void eth_send(pg_wire_t *w, const uint8_t *f, uint32_t n)
  * the chip's own frames, which gives the ACK bit.
  */
 
-static inline void can_init(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t bitrate)
+/* fix8: the bit period in 1/256 cycles (PG_BIT_FIX8(bitrate)) */
+static inline void can_init_fix8(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t fix8)
 {
     w->CTRL   = 0;
-    w->DIV    = PG_BIT_FIX8(bitrate) >> 8;
-    w->CTRL2  = WIRE_FRAC(PG_BIT_FIX8(bitrate)) | WIRE_RESYNC | WIRE_STUFF(5) | WIRE_STUFF_EQUAL |
+    w->DIV    = fix8 >> 8;
+    w->CTRL2  = WIRE_FRAC(fix8) | WIRE_RESYNC | WIRE_STUFF(5) | WIRE_STUFF_EQUAL |
                 WIRE_RX_PACKET | WIRE_EOF_RUN(7);
     w->PINS   = WIRE_PINS(txd_pin, rxd_pin, 0);
     wire_crc(w, 0x4599u, 15, 0, 0, 0);
     w->TXATTR = 0;
     w->CTRL   = WIRE_EN | WIRE_TX | WIRE_RX | WIRE_MSB_FIRST | WIRE_IDLE_HIGH | WIRE_RX_ASYNC |
                 WIRE_ARB_STOP | WIRE_EVENTS | WIRE_LEN(32);
+}
+
+static inline void can_init(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t bitrate)
+{
+    can_init_fix8(w, txd_pin, rxd_pin, PG_BIT_FIX8(bitrate));
 }
 
 /* Queue a data frame (0..8 bytes). The engine sends it at once; it needs
