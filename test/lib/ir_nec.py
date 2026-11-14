@@ -114,7 +114,7 @@ def _synthetic(freq=38000, leader=9000, data=0xC33CA55A, bitmark=562.5, duty=0.5
         nonlocal t
         n = round(us * 1000 / p)
         for k in range(n):
-            edges += [(t + k * p, 1), (t + k * p + duty * p, 0)]
+            edges.extend([(t + k * p, 1), (t + k * p + duty * p, 0)])
         t += n * p
 
     mark(leader)
