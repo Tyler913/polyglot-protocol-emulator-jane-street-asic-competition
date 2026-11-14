@@ -1,5 +1,16 @@
 name: test
-on: [push, workflow_dispatch]
+on:
+  push:
+    # Docs and the FPGA prototype do not change what the RTL tests check
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'fpga/**'
+  workflow_dispatch:
+# A newer push makes a running test of an older commit pointless
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-24.04
