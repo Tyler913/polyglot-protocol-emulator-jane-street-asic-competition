@@ -22,6 +22,13 @@ names against the SDK version you have):
     chip = Polyglot(TTPins(tt))
     chip.run_program(open("usb_hid.bin", "rb").read())
 
+On the FPGA prototype (fpga/, ALIENTEK DFZU2EG) a PC drives the host port
+through the board's PL USB UART instead (CPython + pyserial):
+
+    from polyglot_host import Polyglot, UartBridge
+    chip = Polyglot(UartBridge("COM5"))      # or /dev/ttyUSB0
+    chip.run_program(open("sw/build/blink.bin", "rb").read())
+
 Status: mirrors the cocotb host model (test/lib/host.py) that all tests use;
 not yet run on silicon.
 """
@@ -51,14 +58,55 @@ class TTPins:
         return int(self.tt.uo_out[6])
 
 
+class UartBridge:
+    """PC side of fpga/uart_host_bridge.v (CPython + pyserial). A request is a
+    16-bit length and the bytes of one host SPI transaction; the bridge returns
+    one MISO byte per byte sent. Length 0 returns the status byte (bit 0 =
+    HOST_IRQ). Long transactions go in chunks, each reply read before the next
+    chunk, so the bridge's one-byte reply buffer never overflows."""
+
+    CHUNK = 32
+
+    def __init__(self, port, baud=115200, timeout=2.0):
+        import serial  # pyserial
+
+        self.s = serial.Serial(port, baud, timeout=timeout)
+        self.s.reset_input_buffer()
+
+    def _recv(self, n):
+        b = self.s.read(n)
+        if len(b) != n:
+            raise TimeoutError(f"bridge returned {len(b)} of {n} bytes")
+        return b
+
+    def transfer(self, data):
+        data = bytes(data)
+        if not 0 < len(data) < 65536:
+            raise ValueError("transaction length must be 1..65535")
+        self.s.write(len(data).to_bytes(2, "big"))
+        out = bytearray()
+        for k in range(0, len(data), self.CHUNK):
+            part = data[k : k + self.CHUNK]
+            self.s.write(part)
+            out += self._recv(len(part))
+        return bytes(out)
+
+    def irq(self):
+        self.s.write(b"\x00\x00")
+        return self._recv(1)[0] & 1
+
+
 class Polyglot:
     def __init__(self, pins, delay=None):
         self.p = pins
         self.delay = delay or (lambda: None)  # optional half-period delay
-        self.p.set_cs(1)
-        self.p.set_sck(0)
+        if not hasattr(self.p, "transfer"):
+            self.p.set_cs(1)
+            self.p.set_sck(0)
 
     def _xfer(self, data):
+        if hasattr(self.p, "transfer"):  # a byte-level transport (UartBridge)
+            return bytearray(self.p.transfer(data))
         p, d = self.p, self.delay
         p.set_cs(0)
         d()
