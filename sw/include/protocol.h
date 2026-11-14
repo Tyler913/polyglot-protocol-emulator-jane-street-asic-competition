@@ -671,6 +671,149 @@ static inline void eth_send(pg_wire_t *w, const uint8_t *f, uint32_t n)
     }
 }
 
+/* ---- SWD host (ARM Serial Wire Debug): parameters plus turnarounds in C --------
+ * SWCLK is the internal bit clock in SPI mode 0: SWDIO changes while SWCLK is
+ * low and the target samples on the rising edge; RX samples in the same step,
+ * which reads what the target drove after the previous rising edge. SWDIO is
+ * both the TX and the RX pin, LSB first. The host drives it only in its own
+ * phases: at each turnaround the code waits for the last bit, then rewrites
+ * CTRL (with EN still set nothing is cleared) to switch the TX pin driver off
+ * and RX on, or back. The clock just stops in between, which SWD allows.
+ * Each phase is one push with its own length (TXN): request 8, turnaround +
+ * ACK 4 (5 for a write: one more turnaround), data 32, parity 1 (+1).
+ */
+
+#define SWD_OK     1
+#define SWD_WAIT   2
+#define SWD_FAULT  4
+#define SWD_NOACK  7      /* nobody answered (the pull-up reads 111) */
+#define SWD_PARERR 8      /* read data parity error (returned by swd_xfer) */
+
+#define WIRE_SWD_HOST  (WIRE_EN | WIRE_TX | WIRE_CLK_OUT | WIRE_OE_ALWAYS)
+#define WIRE_SWD_TARGET (WIRE_EN | WIRE_TX | WIRE_RX | WIRE_CLK_OUT | WIRE_OE_NEVER)
+#define WIRE_SWD(swclk_pin, swdio_pin, hz) ((wire_cfg_t){ \
+    WIRE_SWD_HOST, PG_BIT_TICKS(hz), WIRE_PINS(swdio_pin, swdio_pin, swclk_pin), 0u })
+
+/* Request byte: start, APnDP, RnW, A[3:2], even parity, stop 0, park 1. */
+#define SWD_REQ(ap, rnw, a) (0x81u | ((uint32_t)(ap) << 1) | ((uint32_t)(rnw) << 2) | \
+    (((uint32_t)(a) & 0xCu) << 1) |                                                 \
+    ((((ap) ^ (rnw) ^ ((a) >> 2) ^ ((a) >> 3)) & 1u) << 5))
+
+static inline uint32_t pg_parity32(uint32_t x)
+{
+    x ^= x >> 16;
+    x ^= x >> 8;
+    x ^= x >> 4;
+    return (0x6996u >> (x & 15u)) & 1u;
+}
+
+/* Turnaround: wait for the last bit, then hand SWDIO over (host = 1: we drive it). */
+static inline void swd_turn(pg_wire_t *w, int host)
+{
+    wire_flush(w);
+    w->CTRL = host ? WIRE_SWD_HOST : WIRE_SWD_TARGET;
+}
+
+/* Line reset: 56 cycles with SWDIO high. */
+static inline void swd_line_reset(pg_wire_t *w)
+{
+    wire_putn(w, 32, 0xFFFFFFFFu);
+    wire_putn(w, 24, 0xFFFFFFu);
+}
+
+/* Switch an SWJ-DP from JTAG to SWD, line reset, two idle cycles. Read
+ * DPIDR next: until then the DP answers nothing else. */
+static inline void swd_connect(pg_wire_t *w)
+{
+    swd_line_reset(w);
+    wire_putn(w, 16, 0xE79Eu);
+    swd_line_reset(w);
+    wire_putn(w, 2, 0u);
+}
+
+/* One transfer: req = SWD_REQ(ap, rnw, addr). A read stores the data in *data.
+ * Returns the ACK (SWD_OK, SWD_WAIT, SWD_FAULT, SWD_NOACK) or SWD_PARERR. */
+static inline int swd_xfer(pg_wire_t *w, uint32_t req, uint32_t *data)
+{
+    int rnw = (int)(req >> 2) & 1;
+    wire_putn(w, 8, req);
+    swd_turn(w, 0);
+    wire_putn(w, rnw ? 4 : 5, 0u);              /* turnaround, ACK (, turnaround) */
+    int ack = (int)(wire_get(w) >> 1) & 7;
+    if (rnw) {
+        if (ack == SWD_OK) {
+            wire_putn(w, 32, 0u);
+            wire_putn(w, 2, 0u);                /* parity, turnaround */
+            uint32_t d = wire_get(w);
+            if ((wire_get(w) & 1u) != pg_parity32(d)) ack = SWD_PARERR;
+            *data = d;
+        } else {
+            wire_putn(w, 1, 0u);                /* turnaround */
+            (void)wire_get(w);
+        }
+        swd_turn(w, 1);
+    } else {
+        swd_turn(w, 1);
+        if (ack == SWD_OK) {
+            wire_putn(w, 32, *data);
+            wire_putn(w, 1, pg_parity32(*data));
+        }
+    }
+    return ack;
+}
+
+/* ---- JTAG (IEEE 1149.1) host: parameters plus TMS in C ----------------------
+ * TCK is the internal bit clock in SPI mode 0: TDI changes while TCK is low,
+ * the TAPs sample TMS and TDI on the rising edge and change TDO on the falling
+ * edge, and RX samples TDO in step with the bit. TDI = TX, TDO = RX, LSB first.
+ * TMS is a GPIO pin that the code changes only while the clock is stopped
+ * (after wire_flush), so it always meets setup and hold. Moves through the TAP
+ * state machine are 1-bit pushes; shifts are one push of up to 32 bits, with
+ * the last bit pushed on its own so TMS can go high with it.
+ */
+
+#define WIRE_JTAG(tck_pin, tdi_pin, tdo_pin, hz) ((wire_cfg_t){ \
+    WIRE_EN | WIRE_TX | WIRE_RX | WIRE_CLK_OUT, PG_BIT_TICKS(hz), WIRE_PINS(tdi_pin, tdo_pin, tck_pin), 0u })
+
+/* TMS sequences (LSB first) */
+#define JTAG_RESET     0x1Fu, 6   /* any state -> Test-Logic-Reset -> Run-Test/Idle */
+#define JTAG_TO_SHIFT_DR 0x1u, 3  /* Run-Test/Idle -> Shift-DR */
+#define JTAG_TO_SHIFT_IR 0x3u, 4  /* Run-Test/Idle -> Shift-IR */
+#define JTAG_TO_IDLE   0x1u, 2    /* Exit1-xR -> Update-xR -> Run-Test/Idle */
+
+/* Clock n TMS bits (LSB first) with TDI low. */
+static inline void jtag_tms(pg_wire_t *w, int tms_pin, uint32_t bits, int n)
+{
+    for (int i = 0; i < n; i++) {
+        wire_flush(w);
+        pin_write(tms_pin, (int)(bits >> i) & 1);
+        wire_putn(w, 1, 0u);
+        (void)wire_get(w);
+    }
+    wire_flush(w);
+}
+
+/* In Shift-xR: shift n (1..32) bits of tdi in, LSB first, and return the n
+ * bits that come out of TDO. last = 1: TMS goes high with the last bit, which
+ * moves to Exit1-xR. */
+static inline uint32_t jtag_shift(pg_wire_t *w, int tms_pin, uint32_t tdi, int n, int last)
+{
+    uint32_t r = 0;
+    int k = last ? n - 1 : n;               /* bits with TMS low */
+    wire_flush(w);
+    pin_write(tms_pin, 0);
+    if (k) wire_putn(w, k, tdi);
+    if (last) {
+        wire_flush(w);
+        pin_write(tms_pin, 1);
+        wire_putn(w, 1, tdi >> k);
+    }
+    if (k) r = wire_get(w);
+    if (last) r |= (wire_get(w) & 1u) << k;
+    wire_flush(w);
+    return r;
+}
+
 /* ---- CAN 2.0A (11-bit identifiers): frame layer ----------------------------
  * NRZ with stuffing after five equal bits, CRC-15 and arbitration by
  * read-back are done by the engine; frames are built and parsed in C. TX goes

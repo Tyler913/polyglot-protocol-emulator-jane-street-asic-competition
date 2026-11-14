@@ -39,3 +39,10 @@ sw/build/
 
 # Tiny Tapeout support tools (cloned for local hardening)
 tt/
+
+# Vivado outputs (FPGA prototype)
+fpga/out/
+.Xil/
+*.jou
+vivado*.log
+vivado*.str

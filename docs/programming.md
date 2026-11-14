@@ -68,6 +68,19 @@ static int ow_read_bit(void) {
 
 Both are checked against the device datasheets in simulation (`test/test_ws2812.py`, `test/test_onewire.py`).
 
+**ARM Serial Wire Debug** (`sw/examples/swd`, `swd_xfer` in `protocol.h`): one bidirectional data line (SWDIO) with a turnaround cycle each time the direction changes. The engine has no half-duplex mode for this, and needs none: SWCLK is the bit clock in SPI mode 0, SWDIO is both the TX and the RX pin, and at each turnaround the C code waits for the last bit and rewrites `CTRL` to switch the TX driver off and RX on (or back). SWD lets the clock stop between phases, so the pause costs nothing:
+
+```c
+wire_putn(w, 8, req);                 /* request: host drives */
+swd_turn(w, 0);                       /* release SWDIO, RX on */
+wire_putn(w, rnw ? 4 : 5, 0u);        /* turnaround + 3-bit ACK (+ turnaround) */
+int ack = (wire_get(w) >> 1) & 7;
+```
+
+The example runs on a lite engine: it switches a debug port from JTAG to SWD, reads DPIDR and the AP IDR, powers up the debug domain and writes and reads target memory through the MEM-AP, retrying WAIT answers (`test/test_swd.py`, 1 and 5 MHz).
+
+**JTAG** (`sw/examples/jtag`, `jtag_tms` / `jtag_shift` in `protocol.h`) uses the same idea for its fourth wire: the engine clocks TDI out and TDO in on TCK, and TMS is a GPIO pin that C changes only while the clock is stopped, so it meets setup and hold by construction. A shift is one push; its last bit is pushed on its own so that TMS can rise with it. The example reads the IDCODEs of a two-device chain, puts one device in BYPASS and writes a data register in the other (`test/test_jtag.py`).
+
 ## 5. Choosing a mechanism
 
 | The protocol needs | Use |
