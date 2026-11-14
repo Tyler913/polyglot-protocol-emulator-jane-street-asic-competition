@@ -68,6 +68,16 @@ static int ow_read_bit(void) {
 
 Both are checked against the device datasheets in simulation (`test/test_ws2812.py`, `test/test_onewire.py`).
 
+**DMX512** stage lighting (`sw/examples/dmx512`, 220 bytes) is a 250 kbit/s stream of 11-bit slots, and each packet starts with a BREAK (low for at least 92 us) and a MARK AFTER BREAK (high for at least 12 us). With the line idling high, all of it is plain pushes:
+
+```c
+wire_putn(DMX, 26, 0x7u << 23);                        /* BREAK 23 bits low, MAB 3 bits high */
+wire_putn(DMX, 11, 0x600u | (start_code << 1));        /* start bit, 8 data bits, 2 stop bits */
+for (i = 1; i <= n; i++) wire_putn(DMX, 11, 0x600u | (level[i] << 1));
+```
+
+A receiver model written from ANSI E1.11 checks the timing (`test/test_dmx512.py`).
+
 **ARM Serial Wire Debug** (`sw/examples/swd`, `swd_xfer` in `protocol.h`): one bidirectional data line (SWDIO) with a turnaround cycle each time the direction changes. The engine has no half-duplex mode for this, and needs none: SWCLK is the bit clock in SPI mode 0, SWDIO is both the TX and the RX pin, and at each turnaround the C code waits for the last bit and rewrites `CTRL` to switch the TX driver off and RX on (or back). SWD lets the clock stop between phases, so the pause costs nothing:
 
 ```c

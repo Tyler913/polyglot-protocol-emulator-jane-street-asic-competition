@@ -21,6 +21,7 @@
 | `test_eth` | `eth_tx` | IEEE 802.3 transmit decoder (`lib/eth.py`): Manchester symbols, differential pair, preamble/SFD, FCS checked with zlib, TP_IDL; run at a 40 MHz clock |
 | `test_ws2812` | `ws2812` | WS2812 datasheet timing model: high-pulse widths and bit periods |
 | `test_onewire` | `onewire` | 1-Wire device model (DS18B20-style ROM): reset/presence, write and read slot timing; CRC-8 checked in C |
+| `test_dmx512` | `dmx512` | DMX512 receiver model from ANSI E1.11 (`lib/dmx512.py`): BREAK >= 92 us, MARK AFTER BREAK >= 12 us, 4 us bits on the start edge's grid (+/- 2 %), two stop bits, start code and channel data; 16 channels x 3 packets and a full 512-channel universe. Broken variants (84 us BREAK, 8 us MAB, one stop bit) fail it |
 | `test_swd` | `swd` | ARM SW-DP + MEM-AP target model written from the ADIv5 rules (`lib/swd.py`): JTAG-to-SWD selection, lockout until DPIDR is read, request parity, ACK, turnarounds, posted AP reads, FAULT before power-up and ABORT, WAIT retries; flags contention on SWDIO and data changes too close to the rising SWCLK edge. Run at 1 MHz (with WAIT answers) and 5 MHz. Checked against broken firmware: a missing turnaround, a wrong write parity and a host that keeps driving SWDIO through the ACK all fail the test |
 | `test_jtag` | `jtag` | IEEE 1149.1 chain model (`lib/jtag.py`): two devices with 16-state TAP controllers, IR capture (...01), IDCODE after reset, BYPASS, an 8-bit user register; checks TMS/TDI setup and hold around the rising TCK edge. Reads both IDCODEs, the captured IRs, counts the devices in BYPASS, writes the user register twice and reads the old values; 1 and 5 MHz |
 | `test_quad` | `quad_uart` | All four Wire Engines at once (two full, two lite) as UARTs at 1 Mbaud, each judged by its own UART model: banners, then all four receivers busy at the same time and every byte echoed |
@@ -28,7 +29,7 @@
 | `test_mixed` | `mixed4` | Four different protocols at once, one per engine, as four cooperative C tasks (`pt.h`): CAN (frame acknowledged by the bus model's node), SPI RAM write/read at 5 MHz, UART echo at 1 Mbaud and I2C EEPROM page write, ACK polling and read at 400 kHz. All four bus models run in the same simulation; the test also checks that the four tasks overlap in time |
 | `test_queue` | `queue` + `sw/jobs/*` | A resident kernel runs up to four protocol jobs, one per engine; the host model loads eight jobs in two waves (I2C EEPROM 100 kHz, CAN 500 kbit/s, SPI RAM, UART 115200; then CAN 250 kbit/s on other pins, WS2812, UART 1 Mbaud, a second EEPROM at 400 kHz), each into its slot while the other slots keep running. Seven bus models run in the same simulation; the test checks every result and that second-wave jobs ran while a first-wave job was still running |
 
-34 tests in all; they also run in GitHub Actions on every push.
+36 tests in all; they also run in GitHub Actions on every push.
 
 ## What the models found
 

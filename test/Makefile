@@ -49,7 +49,7 @@ TOPLEVEL = tb
 # Gate level (GATES=yes) runs a subset by default (boot, four-engine UART, UART baud rates): a whole RISC-V CPU at
 # gate level is slow, and some RTL tests look at internal signals.
 ifneq ($(GATES),yes)
-COCOTB_TEST_MODULES ?= test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_usb,test_usb_hid,test_eth,test_ws2812,test_onewire,test_can,test_swd,test_jtag,test_quad,test_mixed,test_queue
+COCOTB_TEST_MODULES ?= test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_usb,test_usb_hid,test_eth,test_ws2812,test_dmx512,test_onewire,test_can,test_swd,test_jtag,test_quad,test_mixed,test_queue
 else
 COCOTB_TEST_MODULES ?= test_boot,test_quad,test_uart
 endif
