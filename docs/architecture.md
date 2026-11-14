@@ -18,7 +18,7 @@ Polyglot is a protocol emulator that is programmed in plain C. Protocol knowledg
  |   +---------------------+---------------------------------------+     |
  |   | pg_io: decode, input synchronizers, blocking timeout, pinmux |     |
  |   |   pg_sysio: NOW counter, GPIO, timed GPIO queue, capture     |     |
- |   |   pg_wire x2: Wire Engines (serial, line codes, CRC, ...)    |     |
+ |   |   pg_wire x4: Wire Engines (serial, line codes, CRC, ...)    |     |
  |   +-------------------------------+------------------------------+     |
  +-----------------------------------|------------------------------------+
                                      v
@@ -53,7 +53,7 @@ This is the universal fallback for protocols no engine fits: the 1-Wire master i
 
 A Wire Engine is a serial engine with no protocol in it. Protocols are parameter sets and a few lines of C in `protocol.h`.
 
-Engines 0 and 1 are full engines. Engines 2 and 3 are built with `FULL = 0` ("lite"): they lack line codes (NRZI, Manchester), bit stuffing, differential/SE0 output, packet framing options, CRC, TX word attributes and the timed auto-reply; those registers read 0. They keep the fractional bit period and RX resync, so UART, SPI, I2C, WS2812 and similar bit streams work on every engine; USB, 10BASE-T and CAN need engine 0 or 1. A full engine is about 116k um^2 after synthesis, a lite one about 80k.
+Engines 0 and 1 are full engines. Engines 2 and 3 are built with `FULL = 0` ("lite"): they lack line codes (NRZI, Manchester), bit stuffing, differential/SE0 output, packet framing options, CRC, TX word attributes and the timed auto-reply; those registers read 0. They keep the fractional bit period and RX resync, so UART, SPI, I2C, WS2812 and similar bit streams work on every engine; USB, 10BASE-T and CAN need engine 0 or 1. A full engine is about 116k um^2 after synthesis, a lite one about 80k. Four is the most this floorplan takes at 50 MHz: with a fifth (lite) engine the layout still routed DRC- and LVS-clean but missed setup at the slow corner by 0.45 ns (the SRAM-to-CPU path got longer as the logic spread out), and with a third full engine global routing overflowed (P&R).
 
 ```
  TX FIFO (4 x {attributes, length, 32-bit data})
