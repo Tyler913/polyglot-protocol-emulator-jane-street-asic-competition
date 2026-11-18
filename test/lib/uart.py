@@ -28,6 +28,7 @@ class UartMonitor:
         self.bit = bit
         self.strict = strict
         self.bytes = []
+        self.times = []  # start-edge cycle of each byte (counted from start())
         self.errors = []
         self._task = None
 
@@ -81,6 +82,7 @@ class UartMonitor:
                 if bad:
                     self.errors.append(f"byte {byte:#04x}: edges off the bit grid at {bad} (bit = {self.bit:.3f})")
             self.bytes.append(byte)
+            self.times.append(start)
             last = level
 
 

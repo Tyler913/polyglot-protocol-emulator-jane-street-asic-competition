@@ -272,13 +272,15 @@ typedef struct {
 #define WIRE_FRAC(f)     ((uint32_t)(f) & 0xFFu)   /* bit period = DIV + f/256 cycles */
 #define WIRE_RESYNC      (1u << 8)                 /* async RX realigns on every edge */
 #define WIRE_NRZI        (1u << 9)                 /* line code: a 0 bit toggles the line */
-#define WIRE_MANCHESTER  (2u << 9)                 /* line code (TX): ~bit then bit in each bit time (IEEE 802.3) */
+#define WIRE_MANCHESTER  (2u << 9)                 /* line code: ~bit then bit in each bit time (IEEE 802.3);
+                                                      RX (async) decodes by edge timing: clock recovery */
 #define WIRE_STUFF(n)    (((uint32_t)(n) & 7u) << 11)  /* insert/remove a bit after n equal bits */
 #define WIRE_STUFF_EQUAL (1u << 14)                /* runs of equal bits (CAN); default: runs of ones (USB) */
 #define WIRE_DIFF        (1u << 15)                /* CLK pin = complement of TX; SE0 = RX and GATE pins low */
 #define WIRE_RX_PACKET   (1u << 16)                /* async RX continues word after word until SE0 */
 #define WIRE_TAIL(n)     (((uint32_t)(n) & 3u) << 17)  /* drive n idle bits after the last word */
 #define WIRE_EOF_RUN(n)  (((uint32_t)(n) & 7u) << 19)  /* RX_PACKET also ends after n idle bits (CAN) */
+#define WIRE_MSTART      (1u << 22)                /* Manchester RX: the first edge starts a bit (not mid-bit) */
 
 /* TXATTR bits (apply to the words pushed after the write) */
 #define WIRE_A_NOSTUFF   (1u << 0)
@@ -301,6 +303,13 @@ static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t ini
     w->CRCPOLY = poly;
     w->CRCINIT = init;
     w->CRCCFG  = ((uint32_t)(width - 1) & 31u) | (xorout ? 1u << 5 : 0u) | (((uint32_t)rx_skip & 31u) << 8);
+}
+
+/* SYNC hunt (full engines, async RX): deliver only the bits after the 8-bit
+ * pattern (in bit order: LSB first = first received bit in bit 0). Call after wire_crc. */
+static inline void wire_sync(pg_wire_t *w, uint8_t pattern)
+{
+    w->CRCCFG = (w->CRCCFG & 0xFFFFu) | ((uint32_t)pattern << 16) | (1u << 24);
 }
 
 /* Bit period for a rate in Hz in 1/256 cycles, rounded: DIV = x >> 8, DIV_FRAC = x & 0xFF.
@@ -674,6 +683,43 @@ static inline void eth_send(pg_wire_t *w, const uint8_t *f, uint32_t n)
             i += 1;
         }
     }
+}
+
+/* 10BASE-T receive: RD (one comparator output, idle low) on a full engine.
+ * The engine decodes Manchester by edge timing, hunts for the SFD (0xD5),
+ * delivers the frame as 16-bit words and runs the CRC-32 over it, FCS
+ * included; a good frame leaves the residual ETH_CRC_RESIDUAL. Independent
+ * jitter on every edge up to +/-5 ns (50 MHz) or +/-8 ns (60 MHz) by design
+ * (RTL sim); set DIV = clock / 10 MHz, an integer. */
+#define ETH_CRC_RESIDUAL 0xC704DD7Bu
+
+static inline void eth_rx_init(pg_wire_t *w, int rd_pin)
+{
+    w->CTRL  = 0;
+    w->DIV   = PG_F_CPU / 10000000u;
+    w->CTRL2 = WIRE_MANCHESTER | WIRE_RX_PACKET;
+    w->PINS  = WIRE_PINS(0, rd_pin, 0);
+    wire_crc(w, 0x04C11DB7u, 32, 0xFFFFFFFFu, 0, 0);
+    wire_sync(w, 0xD5u);
+    w->CTRL  = WIRE_EN | WIRE_RX | WIRE_RX_ASYNC | WIRE_EVENTS | WIRE_LEN(16);
+}
+
+/* Receive one frame into f (at most max bytes, FCS included; 16-bit aligned).
+ * Returns its length, or -1 if the FCS is wrong, -2 if it did not fit or had
+ * a partial byte. Blocks until a frame ends. */
+static inline int eth_recv(pg_wire_t *w, uint8_t *f, uint32_t max)
+{
+    uint16_t *h = (uint16_t *)f;
+    uint32_t n = 0, x;
+    int bad = 0;
+    while (!WIRE_IS_END(x = w->RX)) {
+        if (n + 2u <= max) h[n >> 1] = (uint16_t)x; else bad = 1;
+        n += 2u;
+    }
+    uint32_t crc = w->RXCRC, part = WIRE_END_BITS(x);
+    if (part) n -= (part == 8u) ? 1u : 2u;
+    if (bad || (part & 7u)) return -2;
+    return crc == ETH_CRC_RESIDUAL ? (int)n : -1;
 }
 
 /* ---- SWD host (ARM Serial Wire Debug): parameters plus turnarounds in C --------

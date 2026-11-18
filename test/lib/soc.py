@@ -9,7 +9,8 @@ from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, ReadOnly, RisingEdge
+from cocotb.triggers import ClockCycles, Edge, First, ReadOnly, RisingEdge, Timer
+from cocotb.utils import get_sim_time
 
 from .host import HostSpi
 from .pins import bit, ui_pins
@@ -74,11 +75,29 @@ def host_irq(dut):
 
 
 async def wait_irq(dut, level=1, timeout=100_000):
-    """Wait until the firmware sets HOST_IRQ to level; return the cycles waited."""
-    for n in range(timeout):
-        await RisingEdge(dut.clk)
-        await ReadOnly()
+    """Wait until the firmware sets HOST_IRQ to level; return the cycles waited.
+
+    Sleeps on output edges instead of waking every cycle, so long low-speed
+    tests do not spend their time in Python."""
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    t0 = get_sim_time("ps")
+    period = None
+    while True:
         if host_irq(dut) == level:
+            n = get_sim_time("ps") - t0
             await RisingEdge(dut.clk)
-            return n
+            return round(n / period) if period else 0
+        if period is None:
+            await RisingEdge(dut.clk)
+            t1 = get_sim_time("ps")
+            period = t1 - t0
+            await ReadOnly()
+            continue
+        left = timeout * period - (get_sim_time("ps") - t0)
+        if left <= 0:
+            break
+        await First(Edge(dut.uo_out), Timer(left, unit="ps"))
+        await RisingEdge(dut.clk)  # judge the pin as a clocked sample, like before
+        await ReadOnly()
     raise AssertionError(f"HOST_IRQ did not become {level} within {timeout} cycles")
