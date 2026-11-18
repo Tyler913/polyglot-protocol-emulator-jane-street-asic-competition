@@ -53,7 +53,7 @@ async def test_usb_ls_phy(dut):
 
     n, residual, status = await read_shared(host, 1, 3)
     got = b"".join(w.to_bytes(4, "little") for w in await read_shared(host, 8, 4))[:n]
-    expect = bytes([0x80, 0x4B]) + PAYLOAD_RX + crc16_bytes(PAYLOAD_RX)
+    expect = bytes([0x4B]) + PAYLOAD_RX + crc16_bytes(PAYLOAD_RX)  # SYNC consumed by the engine
     assert got == expect, f"chip received {got.hex()} != {expect.hex()}"
     assert residual == 0x800D, f"RX CRC residual {residual:#06x}"
     assert not status & (1 << 26), "stuff error flagged"

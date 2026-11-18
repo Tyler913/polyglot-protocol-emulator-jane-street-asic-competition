@@ -12,6 +12,8 @@ the USB turnaround limit (7.5 bit times) and every packet passes the line,
 stuffing and CRC checks of the bus monitor.
 """
 
+import os
+
 import cocotb
 from cocotb.triggers import ClockCycles
 
@@ -20,6 +22,7 @@ from lib.uart import UartDriver, bit_cycles
 from lib.usb import UsbBus, UsbHost, UsbMonitor
 
 BIT = F_CPU / 1_500_000
+FS_BIT = 4  # full speed at 48 MHz
 
 DEV_DESC = bytes([18, 1, 0x10, 0x01, 0, 0, 0, 8, 0x09, 0x12, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 1])
 REPORTS = [bytes([0x02, 0, 0x0B, 0, 0, 0, 0, 0]), bytes(8), bytes([0, 0, 0x0C, 0, 0, 0, 0, 0]), bytes(8)]
@@ -130,3 +133,26 @@ async def test_usb_keyboard_types_uart_text(dut):
     assert typed(reports) == "Hi" + text, f"typed {typed(reports)!r}"
     chars = (await read_shared(host, 6, 1))[0]
     assert chars == len(text), f"firmware counted {chars} UART characters"
+
+
+@cocotb.test()
+async def test_usb_hid_full_speed(dut):
+    """The same keyboard at 12 Mbit/s (sw/examples/usb_hid_fs) with a 48 MHz
+    clock: full enumeration and reports, turnaround within 7.5 bit times."""
+    host = await start(dut, clk_ns=1000 / 48)
+    bus = UsbBus(dut, dm=4, dp=5, bit=FS_BIT, full_speed=True)
+    mon = UsbMonitor(bus, tol=1)
+    bus.start()
+    await load(host, "usb_hid_fs")
+    await host.ctrl(0x01)
+    await wait_irq(dut, 1, timeout=20_000)
+    h = UsbHost(bus, mon)
+    h.transfer_gap = int(os.environ.get("USB_FS_GAP", "500"))  # 10 us between transfers (5 us is enough)
+    await h.reset(500)
+    try:
+        await enumerate_and_type(dut, h, host, bus, mon)
+    except AssertionError:
+        for p in mon.packets[-12:]:
+            dut._log.info(f"t={p['start']} {p['bytes'].hex()} {p['errors']}")
+        dut._log.info(f"shared {await read_shared(host, 1, 5)}")
+        raise

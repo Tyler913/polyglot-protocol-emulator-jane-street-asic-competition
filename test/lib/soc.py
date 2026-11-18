@@ -9,7 +9,7 @@ from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, Edge, First, ReadOnly, RisingEdge, Timer
+from cocotb.triggers import ClockCycles, First, ReadOnly, RisingEdge, Timer
 from cocotb.utils import get_sim_time
 
 from .host import HostSpi
@@ -43,7 +43,8 @@ def build_firmware(name):
 
 async def start(dut, clk_ns=CLK_NS):
     """Start the clock (default 50 MHz) and reset the chip. Returns a HostSpi."""
-    cocotb.start_soon(Clock(dut.clk, clk_ns, unit="ns").start())
+    period_ps = 2 * round(clk_ns * 500)  # an even number of ps (e.g. 20.834 ns for 48 MHz)
+    cocotb.start_soon(Clock(dut.clk, period_ps, unit="ps").start())
     dut.ena.value = 1
     ui_pins(dut).reset(1 << 7)  # host CS_N idle high, all other inputs low
     dut.uio_in.value = 0
@@ -97,7 +98,7 @@ async def wait_irq(dut, level=1, timeout=100_000):
         left = timeout * period - (get_sim_time("ps") - t0)
         if left <= 0:
             break
-        await First(Edge(dut.uo_out), Timer(left, unit="ps"))
+        await First(dut.uo_out.value_change, Timer(left, unit="ps"))
         await RisingEdge(dut.clk)  # judge the pin as a clocked sample, like before
         await ReadOnly()
     raise AssertionError(f"HOST_IRQ did not become {level} within {timeout} cycles")

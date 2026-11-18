@@ -11,7 +11,7 @@ PROJECT_SOURCES = pg_top.v pg_ahb.v pg_host_spi.v pg_sram.v pg_io.v pg_sysio.v p
 ifneq ($(GATES),yes)
 
 # RTL simulation:
-SIM_BUILD				= sim_build/rtl
+SIM_BUILD				= sim_build/rtl$(if $(filter verilator,$(SIM)),_verilator,)
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 
 else
@@ -38,6 +38,13 @@ VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
 
 endif
 
+# Verilator (make SIM=verilator): about 30x faster than Icarus on the long
+# low-speed tests; two-state, so Icarus (the default, and the CI simulator)
+# stays the reference for X propagation.
+ifeq ($(SIM),verilator)
+EXTRA_ARGS += --timing -Wno-fatal -Wno-lint -Wno-style
+endif
+
 # Allow sharing configuration between design and testbench via `include`:
 COMPILE_ARGS 		+= -I$(SRC_DIR)
 
@@ -49,7 +56,14 @@ TOPLEVEL = tb
 # Gate level (GATES=yes) runs a subset by default (boot, four-engine UART, UART baud rates): a whole RISC-V CPU at
 # gate level is slow, and some RTL tests look at internal signals.
 ifneq ($(GATES),yes)
-COCOTB_TEST_MODULES ?= test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_usb,test_usb_hid,test_eth,test_eth_rx,test_eth_ping,test_ws2812,test_dmx512,test_onewire,test_can,test_swd,test_jtag,test_ps2,test_quad,test_mixed,test_queue
+TESTS_DEFAULT = test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_i2c_sniff,test_sd_spi,test_usb,test_usb_hid,test_usb_host,test_eth,test_eth_rx,test_eth_ping,test_ws2812,test_pulse_codes,test_framing,test_mdio,test_smbus,test_dmx512,test_hd44780,test_onewire,test_can,test_swd,test_jtag,test_ps2,test_quad,test_mixed,test_queue
+# Slow at real protocol speeds (milliseconds of bus time): make EXTENDED=yes, best with SIM=verilator
+TESTS_EXTENDED = test_lin,test_modbus,test_dali,test_ir_nec,test_ir_rx,test_gpio_protocols,test_cec,test_ps2_device,test_onewire_slave,test_eth_nlp
+ifeq ($(EXTENDED),yes)
+COCOTB_TEST_MODULES ?= $(TESTS_DEFAULT),$(TESTS_EXTENDED)
+else
+COCOTB_TEST_MODULES ?= $(TESTS_DEFAULT)
+endif
 else
 COCOTB_TEST_MODULES ?= test_boot,test_quad,test_uart
 endif

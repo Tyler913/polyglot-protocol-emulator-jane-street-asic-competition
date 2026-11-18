@@ -37,7 +37,8 @@
  *                   only while a word is shifting or, with a gate, while the
  *                   frame is active, 2 open drain, 3 never),
  *                   [14:12] RX_DELAY: internal clock, sample k cycles after
- *                   the nominal sample point, [15] TX_LATE: internal clock,
+ *                   the nominal sample point (k < DIV; the bit still counts
+ *                   toward the word it was sampled for), [15] TX_LATE: internal clock,
  *                   TX data changes a quarter bit after the bit start,
  *                   [20:16] LEN-1 (word length 1..32 bits), [21] CLK_OD
  *                   (CLK pin open drain), [22] CLK_WAIT (internal clock: the
@@ -127,12 +128,13 @@
  * at least 3/4 of a bit (DIV - DIV/4 cycles) after the last mid-bit
  * transition is the next mid-bit transition, and the bit is the level after
  * it (rising = 1); earlier edges are bit-boundary transitions and are
- * skipped. So the decoder follows the sender's clock (clock recovery) with
- * no frequency setting beyond DIV. The frame starts at an edge leaving the
- * IDLE level; that start bit is not delivered (with MSTART its mid-bit
- * transition, half a bit later, is not either). The frame ends when no
- * mid-bit transition comes for 1.5 bits; with RX_PACKET the partial last
- * word and the end marker are pushed as for SE0.
+ * skipped, so the decoder follows the sender's clock. The frame starts at an
+ * edge leaving the IDLE level; that start bit is not delivered (with MSTART
+ * its mid-bit transition, half a bit later, is not either). The frame ends
+ * when no mid-bit transition comes for 2 bits; with RX_PACKET the partial
+ * last word and the end marker are pushed as for SE0. Only engines built with
+ * MRX = 1 (here engine 1) have the decoder and the SYNC hunt; in the others
+ * MSTART, SYNC and SYNC_EN are not stored and read as 0.
  *
  * External clock: the sample edge is rising when CPOL == CPHA, falling
  * otherwise; the other edge is the launch edge. The first word of a frame is
@@ -156,7 +158,8 @@
 
 module pg_wire #(
     parameter FIFO_AW = 2,
-    parameter FULL    = 1
+    parameter FULL    = 1,
+    parameter MRX     = 1      // Manchester RX decoder and SYNC hunt (full engines only)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -200,6 +203,9 @@ module pg_wire #(
   reg [22:0] ctrl2;
   reg [5:0]  txattr;
   reg [24:0] crccfg;
+  // Config bits that this engine's build does not use read as 0 (no flops, no read mux inputs).
+  localparam [22:0] CTRL2_MASK  = (MRX != 0) ? 23'h7FFFFF : 23'h3FFFFF;
+  localparam [24:0] CRCCFG_MASK = (MRX != 0) ? 25'h1FFFFFF : 25'h0001FFF;
   reg [31:0] crcinit;
   reg [31:0] poly;
   reg [15:0] turn;
@@ -245,7 +251,7 @@ module pg_wire #(
   wire        crc_xor   = crccfg[5];
   wire [4:0]  rx_skip   = crccfg[12:8];
   wire [7:0]  sync_pat  = crccfg[23:16];
-  wire        sync_en   = full && crccfg[24];
+  wire        sync_en   = full && (MRX != 0) && crccfg[24];
   wire [31:0] crc_mask  = 32'hFFFF_FFFF >> (5'd31 - crc_lm1);
 
   wire [15:0] half = {1'b0, div[15:1]};                     // sample point (counting down from DIV-1)
@@ -586,7 +592,7 @@ module pg_wire #(
   reg        rx_busy;       // async frame in progress
   reg [31:0] rx_sh;
   reg [4:0]  rx_cnt;
-  reg [15:0] rtmr;
+  reg [16:0] rtmr;          // 17 bits: the Manchester window is 2 * DIV
   reg        rx_ovf, arb_lost, stuff_err;
   reg [6:0]  samp_d;        // delayed internal sample strobes (RX_DELAY)
   reg [7:0]  racc;          // fractional bit period accumulator (async RX timer)
@@ -599,6 +605,7 @@ module pg_wire #(
   reg [31:0] rcrc;
   reg        mskip;         // Manchester MSTART: the next edge is the start bit's mid-bit transition
   reg        synced;        // SYNC pattern found in this packet
+  reg        rfirst;        // the next sample is the first of the frame (glitch check)
   reg  [7:0] hunt;          // last decoded bits (SYNC hunt)
   wire [8:0] racc_sum = {1'b0, racc} + {1'b0, frac};
   wire [15:0] rbit_m1 = div - 16'd1 + {15'd0, racc_sum[8]};
@@ -609,9 +616,17 @@ module pg_wire #(
   end
 
   wire       async_mode = rx_async && !clk_ext;
-  wire       mrx        = manch && async_mode;     // Manchester RX: edge timing, no bit grid
+  wire       mrx        = (MRX != 0) && manch && async_mode;   // Manchester RX: edge timing, no bit grid
   wire       int_samp_d = (rx_delay == 3'd0) ? int_sample : samp_d[rx_delay - 3'd1];
-  wire [4:0] rx_len     = async_mode ? len_m1 : ((tx_busy || tail) ? tx_len : len_m1);
+  // RX words take the length of the TX word whose bit is sampled. With
+  // RX_DELAY the sample comes after the nominal point, possibly in the next
+  // word: use the length latched at the nominal point (one sample in flight,
+  // i.e. RX_DELAY < DIV).
+  wire [4:0] len_now    = (tx_busy || tail) ? tx_len : len_m1;
+  reg  [4:0] slen;
+  always @(posedge clk) if (int_sample) slen <= len_now;
+  wire [4:0] rx_len     = async_mode ? len_m1 :
+                          (!clk_ext && rx_delay != 3'd0) ? slen : len_now;
   wire [4:0] rx_idx     = msb_first ? (rx_len - rx_cnt) : rx_cnt;
 
   // Bit-level decode (async RX)
@@ -629,14 +644,16 @@ module pg_wire #(
   // DIFF links are half duplex: RX ignores the line while TX drives it.
   wire       rx_mute    = diff && tx_busy;
   assign     rx_start   = async_mode && !rx_busy && !rx_mute && (rx_in != idle) && (rx_prev == idle);
-  wire       rx_glitch  = async_mode && !mrx && (rbits == 8'd0) && (rx_in == idle) && !se0_in;
-  // Manchester: an edge at least DIV - DIV/4 cycles after the last mid-bit
-  // transition is the next one; no such edge for 1.5 bits ends the frame.
+  wire       rx_glitch  = async_mode && !mrx && rfirst && (rx_in == idle) && !se0_in;
+  // Manchester: rtmr counts down from 2*DIV at each mid-bit transition. An
+  // edge at least DIV - DIV/4 cycles after it is the next one (rtmr <=
+  // DIV + DIV/4 + 1); none for 2 bits (rtmr == 0) ends the frame.
   wire       rx_edge    = (rx_in != rx_prev);
-  wire       m_edge     = mrx && rx_busy && rx_edge && !rx_mute && (mskip || (rtmr > qpt));
-  wire       m_end      = mrx && rx_busy && !rx_edge && (rtmr == div + half);
+  wire [16:0] m_thr     = {1'b0, div} + {3'b000, div[15:2]} + 17'd1;
+  wire       m_edge     = mrx && rx_busy && rx_edge && !rx_mute && (mskip || (rtmr <= m_thr));
+  wire       m_end      = mrx && rx_busy && !rx_edge && (rtmr == 17'd0);
   wire       rx_sample  = mrx        ? ((m_edge && !mskip) || m_end) :
-                          async_mode ? (rx_busy && (rtmr == half))
+                          async_mode ? (rx_busy && (rtmr == {1'b0, half}))
                                      : (clk_ext ? ext_sample : int_samp_d);
   wire       rx_eof     = rx_packet && (eof_run != 3'd0) && (rx_in == idle) &&
                           ({1'b0, irun} + 4'd1 >= {1'b0, eof_run});
@@ -683,7 +700,7 @@ module pg_wire #(
       rx_busy <= 1'b0;
       rx_sh   <= 32'd0;
       rx_cnt  <= 5'd0;
-      rtmr    <= 16'd0;
+      rtmr    <= 17'd0;
       racc    <= 8'd0;
       rlvl    <= 1'b1;
       rrun    <= 3'd0;
@@ -696,19 +713,20 @@ module pg_wire #(
       mskip   <= 1'b0;
       synced  <= 1'b0;
       hunt    <= 8'd0;
+      rfirst  <= 1'b0;
     end else begin
-      if (mrx && (rx_start || rx_busy)) begin
-        // Manchester: rtmr counts cycles since the last mid-bit transition
+      if (rx_start)       rfirst <= 1'b1;
+      else if (rx_sample) rfirst <= 1'b0;
+      if (mrx && (rx_start || m_edge)) begin
+        // Manchester: restart the 2-bit window at the frame start and at each mid-bit transition
         rx_busy <= 1'b1;
-        if (rx_start || m_edge) rtmr <= 16'd1;
-        else if (rtmr != 16'hFFFF) rtmr <= rtmr + 16'd1;
-        if (rx_start) mskip <= mstart;
-        else if (m_edge) mskip <= 1'b0;
+        rtmr    <= {div, 1'b0};
+        mskip   <= rx_start ? mstart : 1'b0;
       end
       if (rx_start || (resync && !mrx && rx_busy && rx_in != rx_prev)) begin
         if (!mrx) begin              // a start edge, or (RESYNC) any edge: realign the bit timer
           rx_busy <= 1'b1;
-          rtmr    <= div - 16'd1;
+          rtmr    <= {1'b0, div - 16'd1};
         end
         if (rx_start) begin
           synced <= 1'b0;
@@ -725,12 +743,14 @@ module pg_wire #(
           rx_sh <= 32'd0;
           rx_cnt <= 5'd0;
         end
-      end else if (rx_busy && !mrx) begin
-        if (rtmr == 16'd0) begin
-          rtmr <= rbit_m1;
-          racc <= racc_sum[7:0];
+      end else if (rx_busy && !(mrx && m_edge)) begin
+        if (rtmr == 17'd0) begin
+          if (!mrx) begin
+            rtmr <= {1'b0, rbit_m1};
+            racc <= racc_sum[7:0];
+          end
         end else begin
-          rtmr <= rtmr - 16'd1;
+          rtmr <= rtmr - 17'd1;
         end
       end
 
@@ -896,9 +916,9 @@ module pg_wire #(
     end else if (cfg_wr) begin
       case (ra)
         R_CTRL:    ctrl    <= wdata[27:0];
-        R_CTRL2:   ctrl2   <= wdata[22:0];
+        R_CTRL2:   ctrl2   <= wdata[22:0] & CTRL2_MASK;
         R_TXATTR:  txattr  <= wdata[5:0];
-        R_CRCCFG:  crccfg  <= wdata[24:0];
+        R_CRCCFG:  crccfg  <= wdata[24:0] & CRCCFG_MASK;
         R_CRCINIT: crcinit <= wdata;
         R_CRCPOLY: poly    <= wdata;
         R_RXMATCH: rxmatch <= wdata[19:0];

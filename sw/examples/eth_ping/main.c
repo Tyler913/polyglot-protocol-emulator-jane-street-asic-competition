@@ -10,8 +10,8 @@
  * One CPU does both directions, so while it sends a reply (about 70 us for
  * a ping) a frame arriving would overflow the 4-word RX FIFO and be counted
  * as bad: like a host waiting for each answer, send the next request after
- * the reply. Link pulses (NLP) are not sent; a real PHY-less link also needs them
- * (timed GPIO, every 16 ms).
+ * the reply. While idle it sends a normal link pulse every 16 ms, which a
+ * link partner needs to see before it reports a link.
  *
  * Pins: RD (line receiver output, idle low) ui[0] (P16); TD+ uio[6] (P6),
  * TD- uio[7] (P7).
@@ -60,7 +60,18 @@ int main(void)
 {
     eth_init(TX, PIN_UIO(6), PIN_UIO(7));
     eth_rx_init(RX, PIN_UI(0));
+    uint32_t last_nlp = now();
     for (;;) {
+        uint32_t since = now() - last_nlp;
+        block_timeout(since < PG_US_TO_TICKS(15990) ? PG_US_TO_TICKS(16000) - since : 500u);
+        (void)wait_events(EV_WIRE(1));                   /* a frame, or time for a link pulse */
+        int idle = block_timed_out();
+        block_timeout(0);
+        if (now() - last_nlp >= PG_US_TO_TICKS(16000)) {
+            eth_link_pulse(TX);
+            last_nlp = now();
+        }
+        if (idle) continue;
         int n = eth_recv(RX, f, sizeof f);
         PG_SHARED[0]++;
         if (n < 64) { PG_SHARED[1]++; continue; }

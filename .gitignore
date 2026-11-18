@@ -50,3 +50,5 @@ vivado*.str
 # Local experiment configs and RTL variants
 src/_*.json
 src/_alt*/
+src/_iso_*/
+.claude/

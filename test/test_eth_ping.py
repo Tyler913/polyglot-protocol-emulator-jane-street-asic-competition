@@ -93,3 +93,4 @@ async def test_eth_arp_ping(dut):
         t, code, _, ident, s = struct.unpack("!BBHHH", icmp[:8])
         assert (t, code, ident, s) == (0, 0, 0x4242, seq)
         assert icmp[8:] == pl
+

@@ -12,7 +12,7 @@
  *
  * Pins: D- uio[4] (P4), D+ uio[5] (P5). Low speed: idle J = D- high.
  * Results (PG_SHARED): [1] RX byte count, [2] RX CRC residual (0x800D = OK),
- * [3] STATUS after the packet, [8..] received bytes (SYNC, PID, data, CRC).
+ * [3] STATUS after the packet, [8..] received bytes (PID, data, CRC; the engine consumes SYNC).
  */
 
 #include "protocol.h"
@@ -37,12 +37,9 @@ int main(void)
     /* 2. hardware handshake after the next packet, then receive it */
     usb_queue_handshake(USB, USB_PID_ACK);
     host_irq(1);
-    for (;;) {
-        uint32_t w = wire_get(USB);
-        if (w == WIRE_EV_END) break;
-        if (n < 64) rx[n] = (uint8_t)w;
-        n++;
-    }
+    uint8_t buf[32];
+    while (!usb_rx_word(wire_get(USB), buf, sizeof buf, &n)) { }
+    for (uint32_t i = 0; i < n && i < sizeof buf; i++) rx[i] = buf[i];
     PG_SHARED[1] = n;
     PG_SHARED[2] = USB->RXCRC;
     PG_SHARED[3] = USB->STATUS;

@@ -15,7 +15,8 @@
  *                                has received data, [8] an edge is captured.
  *                                Lets C sleep on several sources at once.
  *   0x8000_0100 + 0x100*n  Wire Engine n (pg_wire), n = 0..NUM_WIRES-1;
- *                          engines n >= NUM_FULL are lite (pg_wire FULL = 0)
+ *                          engines n >= NUM_FULL are lite (pg_wire FULL = 0);
+ *                          only engine 1 has the Manchester RX decoder (MRX)
  *
  * A blocking access (full TX FIFO, empty RX FIFO, ...) holds HREADY low.
  * If it waits longer than BLK_TIMEOUT cycles it completes without effect:
@@ -102,7 +103,7 @@ module pg_io #(
   generate
     for (g = 0; g < NUM_WIRES; g = g + 1) begin : g_wire
       assign w_sel[g] = valid && (page == g + 1);
-      pg_wire #(.FULL(g < NUM_FULL ? 1 : 0)) u_wire (
+      pg_wire #(.FULL(g < NUM_FULL ? 1 : 0), .MRX(g == 1 ? 1 : 0)) u_wire (
           .clk    (clk),
           .rst    (rst),
           .valid  (w_sel[g]),

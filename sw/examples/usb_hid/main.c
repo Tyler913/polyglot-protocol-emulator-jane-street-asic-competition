@@ -15,7 +15,8 @@
  * packet, DATA after an IN token) is queued in advance and the engine sends
  * it by itself a fixed turnaround after the matching packet (RXMATCH).
  *
- * Pins: D- uio[4] (P4), D+ uio[5] (P5), 1.5 kOhm pull-up on D- (low speed);
+ * Pins: D- uio[4] (P4), D+ uio[5] (P5), 1.5 kOhm pull-up on D- (low speed;
+ * examples/usb_hid_fs builds the same file for full speed: pull-up on D+);
  * UART RX on ui[0] (P16), 8N1, 115200 baud (UART_BAUD).
  * VID 0x1209 / PID 0x0001 are the pid.codes test IDs.
  * Results (PG_SHARED): [1] device address, [2] configuration, [3] reports
@@ -26,6 +27,11 @@
 
 #define USB  W1
 #define UART W0
+#ifdef USB_FULL_SPEED                 /* examples/usb_hid_fs: 12 Mbit/s, pull-up on D+ */
+#define USB_INIT(w) usb_fs_init((w), PIN_UIO(4), PIN_UIO(5))
+#else
+#define USB_INIT(w) usb_ls_init((w), PIN_UIO(4), PIN_UIO(5))
+#endif
 #ifndef UART_BAUD
 #define UART_BAUD 115200u            /* compile-time: the divider is computed by the compiler */
 #endif
@@ -72,6 +78,14 @@ static void type_char(char c)
 }
 
 static uint8_t addr, new_addr, config, ep1_toggle;
+
+/* The 16 bits after the PID of a token for our address, endpoint 0, CRC5
+ * included. Computed once per address, so checking a token is a compare:
+ * at full speed the DATA packet follows a SETUP or OUT token within a few
+ * hundred cycles and its ACK must be queued by then. */
+static uint32_t tok_ep0, tok_new;
+
+static uint32_t token_bits(uint8_t a) { return a | (usb_crc5(a) << 11); }
 static uint32_t nreport;
 static uint8_t report[8];
 
@@ -146,12 +160,16 @@ static void setup_request(const uint8_t *s)
     }
 }
 
-static int token_ok(const uint8_t *p, uint8_t *ep)
+
+static void set_address(uint8_t a)
 {
-    uint32_t bits = p[2] | ((uint32_t)p[3] << 8);
-    if (usb_crc5(bits & 0x7FFu) != (bits >> 11)) return 0;
-    *ep = (uint8_t)((bits >> 7) & 0xF);
-    return (bits & 0x7F) == addr;
+    addr = a;
+    tok_ep0 = token_bits(a);
+}
+
+static int token_ep0(const uint8_t *p)
+{
+    return (p[2] | ((uint32_t)p[3] << 8)) == tok_ep0;
 }
 
 /* Next report: a press for the next queued key, or a release after a press.
@@ -176,20 +194,20 @@ static void report_taken(void)
 
 static void handle(const uint8_t *p, uint32_t n)
 {
-    uint8_t ep, pid;
+    uint8_t pid;
 
     if (n < 2 || p[0] != 0x80) return;
     pid = p[1];
     switch (pid) {
     case USB_PID_SETUP:
-        if (n == 4 && token_ok(p, &ep) && ep == 0) {
+        if (n == 4 && token_ep0(p)) {
             settle_tx();
             ctl = CTL_SETUP;
             queue_ack_for_data();
         }
         break;
     case USB_PID_OUT:
-        if (n == 4 && token_ok(p, &ep) && ep == 0) {
+        if (n == 4 && ctl != CTL_OUT_STATUS && token_ep0(p)) {
             settle_tx();
             ctl = CTL_OUT_STATUS;
             queue_ack_for_data();
@@ -202,7 +220,8 @@ static void handle(const uint8_t *p, uint32_t n)
         if (USB->RXCRC != 0x800Du) { PG_SHARED[5]++; break; }
         if (ctl == CTL_SETUP && n == 12) {
             wire_flush(USB);                        /* our ACK is out */
-            setup_request(p + 2);
+            setup_request(p + 2);                   /* queues the answer first, then: */
+            if (new_addr) tok_new = token_bits(new_addr);   /* not when the status stage ends */
         } else if (ctl == CTL_OUT_STATUS) {
             ctl = CTL_IDLE;
         }
@@ -213,10 +232,13 @@ static void handle(const uint8_t *p, uint32_t n)
             uint32_t sent = in_left < 8u ? in_left : 8u;
             in_ptr += sent; in_left -= sent; in_toggle ^= 1;
             if (in_left || (sent == 8 && zlp_needed)) queue_next_in_chunk();
-            else ctl = CTL_OUT_STATUS;              /* host will send OUT + ZLP */
+            else {                                  /* host will send OUT + ZLP: its ACK is */
+                ctl = CTL_OUT_STATUS;               /* queued now (at full speed the ZLP */
+                queue_ack_for_data();               /* follows the OUT token within ~150 cycles) */
+            }
         } else if (ctl == CTL_IN_STATUS) {
             ctl = CTL_IDLE;
-            if (new_addr) { addr = new_addr; new_addr = 0; PG_SHARED[1] = addr; }
+            if (new_addr) { addr = new_addr; tok_ep0 = tok_new; new_addr = 0; PG_SHARED[1] = addr; }
             PG_SHARED[2] = config;
             if (config) next_report();
         } else if (config) {                        /* interrupt endpoint report taken */
@@ -233,14 +255,15 @@ static void handle(const uint8_t *p, uint32_t n)
 
 int main(void)
 {
-    uint8_t pkt[16];
+    uint8_t pkt[16] = { 0x80 };                     /* SYNC (consumed by the engine), PID, ... */
     uint32_t n = 0;
 
     for (int i = 1; i < 7; i++) PG_SHARED[i] = 0;
     type_char('H');
     type_char('i');
     wire_config(UART, WIRE_UART_8N1(PIN_UO(1), PIN_UI(0), UART_BAUD));
-    usb_ls_init(USB, PIN_UIO(4), PIN_UIO(5));
+    USB_INIT(USB);
+    set_address(0);
     host_irq(1);
 
     for (;;) {
@@ -250,25 +273,23 @@ int main(void)
             if (c >= 0) { type_char((char)c); PG_SHARED[6]++; }
         }
         if (!(ev & EV_WIRE(1))) continue;
-        uint32_t w = wire_get(USB);
-        if (w != WIRE_EV_END) {
-            if (n < sizeof pkt) pkt[n] = (uint8_t)w;
-            n++;
-            continue;
-        }
+        /* A packet has started: take all of it in a tight loop (at full speed a
+         * word comes every 64 cycles; the UART FIFO holds 350 us of input). */
+        while (!usb_rx_word(wire_get(USB), pkt + 1, sizeof pkt - 1, &n)) { }
         if (n == 0) {                               /* SE0 without a packet: keep-alive or reset */
             uint32_t t0 = now();
             while ((PG_GPIO_IN & 0x30u) == 0 && now() - t0 < PG_US_TO_TICKS(100)) { }
             if (now() - t0 > PG_US_TO_TICKS(3)) {   /* reset (2.5 us minimum) */
                 wire_flush(USB);
                 USB->CTRL &= ~WIRE_EN;
-                usb_ls_init(USB, PIN_UIO(4), PIN_UIO(5));
-                addr = new_addr = config = 0; ep1_toggle = 0; nreport = 0; released = 1;
+                USB_INIT(USB);
+                new_addr = config = 0; ep1_toggle = 0; nreport = 0; released = 1;
+                set_address(0);
                 ctl = CTL_IDLE; in_pending = 0;
                 PG_SHARED[4]++;
             }
         } else {
-            handle(pkt, n);
+            handle(pkt, n + 1);
         }
         n = 0;
     }

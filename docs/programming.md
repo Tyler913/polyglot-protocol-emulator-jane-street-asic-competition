@@ -138,8 +138,9 @@ The program, its data and a 256-byte stack share 3.5 KB (the top 256 bytes are t
 | UART | `WIRE_UART_8N1`, `uart_putc`, `uart_puts`, `uart_getc` |
 | SPI | `WIRE_SPI_CTRL`, `WIRE_SPI_CTRL_DLY`, `spi_select`, `spi_deselect`, `spi_xfer`, `spi_transfer`, `WIRE_SPI_TARGET` |
 | I2C | `i2c_init`, `i2c_start`, `i2c_stop`, `i2c_write`, `i2c_read`, `WIRE_I2C_TARGET` |
-| USB low speed | `usb_ls_init`, `usb_send_data`, `usb_queue_handshake`, `usb_crc5`, `USB_PID_*`, `USB_MATCH_*` |
-| 10BASE-T | `eth_init`, `eth_send` |
+| USB (W1) | `usb_ls_init`, `usb_fs_init`, `usb_send_data`, `usb_queue_handshake`, `usb_rx_word`, `usb_crc5`, `USB_PID_*`, `USB_MATCH_*` |
+| 10BASE-T | `eth_init`, `eth_send` (transmit); `eth_rx_init`, `eth_recv`, `ETH_CRC_RESIDUAL` (receive, W1) |
+| Manchester RX, sync (W1) | `WIRE_MANCHESTER` on async RX, `WIRE_MSTART`, `wire_sync()` |
 | CAN 2.0A | `can_init`, `can_send`, `can_recv`, `can_recv_ack` (receiver ACK), `can_parse`, `can_frame_t` |
 | SWD, JTAG | `WIRE_SWD`, `swd_connect`, `swd_xfer`, `SWD_REQ`; `WIRE_JTAG`, `jtag_tms`, `jtag_shift`, `JTAG_*` TMS sequences |
 | Several protocols at once | `pt.h`: `PT_BEGIN`, `PT_WAIT`, `PT_YIELD`, `PT_END` (cooperative tasks); `job.h`: queue jobs (`JOB_ENTRY`, slots, mailbox) |

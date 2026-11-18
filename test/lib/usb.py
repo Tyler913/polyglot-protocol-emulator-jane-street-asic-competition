@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Tyler Hong
 # SPDX-License-Identifier: Apache-2.0
-"""Independent USB low-speed (1.5 Mbit/s) line model, written from the USB 2.0
+"""Independent USB low-speed (1.5 Mbit/s) and full-speed (12 Mbit/s) line model, written from the USB 2.0
 specification (chapter 7/8: NRZI, bit stuffing after six ones, SYNC, PIDs,
 CRC5/CRC16, SE0-based EOP), not from the RTL.
 
 Low speed: idle J = D- high, D+ low (the device's pull-up is on D-).
-K = D- low, D+ high. SE0 = both low.
+K = D- low, D+ high. SE0 = both low. Full speed (full_speed=True): J and K
+swap lines (pull-up on D+); everything else is the same.
 
 UsbBus resolves the two uio pins every clock: the chip drives them when its
 output enables are set, the host model when it is sending; nobody driving
@@ -70,8 +71,10 @@ def line_states(packet):
 
 
 class UsbBus:
-    def __init__(self, dut, dm, dp, bit):
+    def __init__(self, dut, dm, dp, bit, full_speed=False):
         self.dut, self.dm, self.dp, self.bit = dut, dm, dp, bit
+        # (D-, D+) levels of J and K
+        self.jk = {J: (0, 1), K: (1, 0)} if full_speed else {J: (1, 0), K: (0, 1)}
         self.host = None  # J/K/SE0 while the host drives, else None
         self.state = J
         self.t = 0
@@ -96,13 +99,13 @@ class UsbBus:
                 if self.host is not None:
                     self.errors.append(f"t={self.t}: chip and host drive the bus together")
                 dm, dp = (out >> self.dm) & 1, (out >> self.dp) & 1
-                s = J if (dm, dp) == (1, 0) else K if (dm, dp) == (0, 1) else SE0 if (dm, dp) == (0, 0) else "SE1"
+                s = J if (dm, dp) == self.jk[J] else K if (dm, dp) == self.jk[K] else SE0 if (dm, dp) == (0, 0) else "SE1"
                 if s == "SE1":
                     self.errors.append(f"t={self.t}: chip drives SE1")
             else:
                 s = self.host or J
             self.state = s
-            dm, dp = (1, 0) if s == J else (0, 1) if s == K else (0, 0)
+            dm, dp = self.jk.get(s, (0, 0))
             val = int(self.dut.uio_in.value) & ~((1 << self.dm) | (1 << self.dp))
             self.dut.uio_in.value = val | (dm << self.dm) | (dp << self.dp)
             for f in self.listeners:
@@ -210,8 +213,16 @@ class UsbHost:
         self.clk = bus.dut.clk
         self.turnarounds = []  # device response gaps in bit times
 
+    transfer_gap = 0  # extra cycles before each control transfer and interrupt poll
+
     async def gap(self, bits):
         await ClockCycles(self.clk, max(1, round(bits * self.bit)))
+
+    async def next_transfer(self):
+        """Host software starts a new transfer: stages inside one transfer follow
+        each other after the bit-time gaps above, transfers after transfer_gap."""
+        if self.transfer_gap:
+            await ClockCycles(self.clk, self.transfer_gap)
 
     async def reset(self, cycles):
         self.bus.host = SE0
@@ -246,6 +257,8 @@ class UsbHost:
         assert r is not None and r["bytes"] == bytes([self.PID_ACK]), f"SETUP not acknowledged: {r and r['bytes'].hex()}"
 
     async def in_(self, addr, ep, toggle):
+        if ep:
+            await self.next_transfer()  # interrupt poll
         n = await self._send(token_packet(self.PID_IN, addr, ep))
         r = await self._response(n)
         assert r is not None, f"no answer to IN addr {addr} ep {ep}"
@@ -264,6 +277,7 @@ class UsbHost:
 
     async def control_read(self, addr, setup8):
         length = setup8[6] | (setup8[7] << 8)
+        await self.next_transfer()
         await self.setup(addr, setup8)
         data, toggle = b"", 1
         while len(data) < length:
@@ -279,6 +293,7 @@ class UsbHost:
         return data
 
     async def control_write(self, addr, setup8):
+        await self.next_transfer()
         await self.setup(addr, setup8)
         await self.gap(30)
         zlp = await self.in_(addr, 0, 1)

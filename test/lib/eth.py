@@ -18,6 +18,7 @@ class EthTxMonitor:
         self.dut, self.tdp, self.tdn, self.half = dut, tdp, tdn, half
         self.tail = tail_bits * 2 * half
         self.frames = []  # (bytes incl. FCS, fcs_ok)
+        self.link_pulses = []  # (start cycle, cycles high) of bursts shorter than a byte: NLPs
         self.errors = []
         self._levels = []
 
@@ -42,7 +43,10 @@ class EthTxMonitor:
                     self.errors.append(f"t={t}: TD+ == TD- while driven")
                 self._levels.append(p)
             elif self._levels:
-                self._decode(self._levels)
+                if len(self._levels) < 8 * 2 * self.half:
+                    self.link_pulses.append((t - len(self._levels), sum(self._levels)))
+                else:
+                    self._decode(self._levels)
                 self._levels = []
 
     def _decode(self, lv):

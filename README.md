@@ -4,7 +4,7 @@ An entry for the [Jane Street protocol emulator ASIC competition](https://blog.j
 
 A small RISC-V core runs ordinary C compiled with stock GCC or Clang. Protocol-agnostic, timed *wire engines* move bits on exact clock cycles. One header, `protocol.h`, is the whole toolchain. There is no custom assembler and no custom compiler.
 
-**Status:** UART, SPI and I2C (both roles each), a USB low-speed HID keyboard, 10BASE-T transmit, CAN 2.0A (sending, arbitration, receiving with ACK), JTAG, ARM SWD and PS/2 hosts, WS2812, DMX512, NEC infrared (carrier made by the engine) and 1-Wire run as C firmware on the RTL and are checked against independent peer models. The full design (with the SRAM macro) passes the Tiny Tapeout flow: LVS and DRC clean, timing met at 50 MHz, precheck and gate-level tests pass, locally and in the official GitHub workflow. The same RTL builds for an FPGA board (not yet run on hardware).
+**Status:** about 40 protocols run as C firmware on the RTL and are checked against independent peer models written from each specification ([docs/protocols.md](docs/protocols.md)): UART, SPI, I2C, 1-Wire and PS/2 in both roles, SMBus, MDIO, SD cards, USB 1.1 (low-speed device and host, full-speed device), 10BASE-T (transmit, receive with clock recovery, an ARP/ping node), CAN 2.0A, LIN, Modbus RTU, HDLC, SENT, DMX512, DALI, Wiegand, JTAG, ARM SWD, HDMI-CEC, I2S, MIDI, HD44780, WS2812, DShot, NEC and RC-5 infrared, quadrature encoders, and several of them at once. The full design (with the SRAM macro) passes the Tiny Tapeout flow: LVS and DRC clean, timing met at 50 MHz, precheck and gate-level tests pass, locally and in the official GitHub workflow. The same RTL builds for an FPGA board (not yet run on hardware).
 
 ## Layout
 

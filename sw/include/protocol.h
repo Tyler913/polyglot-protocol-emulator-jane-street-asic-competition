@@ -273,7 +273,7 @@ typedef struct {
 #define WIRE_RESYNC      (1u << 8)                 /* async RX realigns on every edge */
 #define WIRE_NRZI        (1u << 9)                 /* line code: a 0 bit toggles the line */
 #define WIRE_MANCHESTER  (2u << 9)                 /* line code: ~bit then bit in each bit time (IEEE 802.3);
-                                                      RX (async) decodes by edge timing: clock recovery */
+                                                      RX (async, engine 1) decodes by edge timing: clock recovery */
 #define WIRE_STUFF(n)    (((uint32_t)(n) & 7u) << 11)  /* insert/remove a bit after n equal bits */
 #define WIRE_STUFF_EQUAL (1u << 14)                /* runs of equal bits (CAN); default: runs of ones (USB) */
 #define WIRE_DIFF        (1u << 15)                /* CLK pin = complement of TX; SE0 = RX and GATE pins low */
@@ -305,7 +305,7 @@ static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t ini
     w->CRCCFG  = ((uint32_t)(width - 1) & 31u) | (xorout ? 1u << 5 : 0u) | (((uint32_t)rx_skip & 31u) << 8);
 }
 
-/* SYNC hunt (full engines, async RX): deliver only the bits after the 8-bit
+/* SYNC hunt (engine 1, async RX): deliver only the bits after the 8-bit
  * pattern (in bit order: LSB first = first received bit in bit 0). Call after wire_crc. */
 static inline void wire_sync(pg_wire_t *w, uint8_t pattern)
 {
@@ -558,13 +558,20 @@ static inline uint8_t i2c_read(const i2c_t *b, int ack)
     WIRE_CLK_EXT | WIRE_GATE_I2C | WIRE_EVENTS | WIRE_STRETCH | WIRE_LEN(8),        \
     2u, WIRE_PINS(sda_pin, sda_pin, scl_pin), 0u })
 
-/* ---- USB low speed (1.5 Mbit/s): line layer ------------------------------------
+/* ---- USB low speed (1.5 Mbit/s) and full speed (12 Mbit/s): line layer ----------
  * NRZI, stuffing after six ones, CRC16 and the SE0 end of packet are done by
- * the engine; packets, PIDs and the device state machine are C. D- is the
- * engine's TX/RX pin, D+ its CLK (complement) and GATE (SE0 detect) pin.
- * Idle J = D- high (low-speed pull-up on D-). The handshake for a received
- * packet can be queued in advance and goes out by itself after USB_TURN
- * cycles, well inside the 7.5 bit times the spec allows.
+ * the engine; packets, PIDs and the device state machine are C. The line of
+ * the J state is the engine's TX/RX pin, the other line its CLK (complement)
+ * and GATE (SE0 detect) pin: low speed idles with D- high (pull-up on D-),
+ * full speed with D+ high (pull-up on D+). The two speeds differ only in
+ * these pins and the bit period. The handshake for a received packet can be
+ * queued in advance and goes out by itself after USB_TURN(rate) cycles,
+ * well inside the 7.5 bit times the spec allows. USB runs on W1 (it needs
+ * the SYNC hunt, which only engine 1 has). RX: the engine's SYNC hunt
+ * consumes the SYNC byte and packets arrive as 16-bit words, PID first (at
+ * full speed a byte every 32 cycles is too fast to take one by one), see
+ * usb_rx_word(). Full speed needs a clock
+ * that is a multiple of 12 MHz (48 or 60 MHz: 4 or 5 cycles per bit).
  */
 
 #define USB_PID_OUT   0xE1u
@@ -577,21 +584,46 @@ static inline uint8_t i2c_read(const i2c_t *b, int ack)
 #define USB_PID_STALL 0x1Eu
 
 #ifndef USB_TURN
-#define USB_TURN (PG_BIT_FIX8(1500000) * 9u / 512u)   /* 4.5 bit times after SE0 is seen */
+#define USB_TURN(rate) (PG_BIT_FIX8(rate) * 9u / 512u)  /* 4.5 bit times after SE0 is seen */
 #endif
+
+/* j_pin: the line that is high in the J (idle) state, k_pin: the other one */
+static inline void usb_line_init(pg_wire_t *w, int j_pin, int k_pin, uint32_t fix8, uint32_t turn)
+{
+    w->CTRL    = 0;
+    w->DIV     = fix8 >> 8;
+    w->CTRL2   = WIRE_FRAC(fix8) | WIRE_RESYNC | WIRE_NRZI | WIRE_STUFF(6) |
+                 WIRE_DIFF | WIRE_RX_PACKET | WIRE_TAIL(1);      /* EOP: SE0 SE0, then J driven by TAIL */
+    w->PINS    = WIRE_PINS(j_pin, j_pin, k_pin) | WIRE_GATE_PIN(k_pin);
+    wire_crc(w, 0x8005u, 16, 0xFFFFu, 1, 8);        /* CRC16; RX skips the PID */
+    wire_sync(w, 0x80u);                             /* RX starts after SYNC */
+    w->TURN    = turn;
+    w->TXATTR  = 0;
+    w->CTRL    = WIRE_EN | WIRE_TX | WIRE_RX | WIRE_IDLE_HIGH | WIRE_RX_ASYNC | WIRE_OE_FRAME |
+                 WIRE_EVENTS | WIRE_LEN(16);
+}
+
+/* Add one RX word to a packet buffer. Returns 1 when the packet ended
+ * (*n = its length in bytes, PID first), 0 otherwise. */
+static inline int usb_rx_word(uint32_t x, uint8_t *pkt, uint32_t max, uint32_t *n)
+{
+    if (WIRE_IS_END(x)) {
+        if (WIRE_END_BITS(x) == 8u) *n -= 1u;       /* odd length: the last word held one byte */
+        return 1;
+    }
+    if (*n + 2u <= max) { pkt[*n] = (uint8_t)x; pkt[*n + 1u] = (uint8_t)(x >> 8); }
+    *n += 2u;
+    return 0;
+}
 
 static inline void usb_ls_init(pg_wire_t *w, int dm_pin, int dp_pin)
 {
-    w->CTRL    = 0;
-    w->DIV     = PG_BIT_FIX8(1500000) >> 8;
-    w->CTRL2   = WIRE_FRAC(PG_BIT_FIX8(1500000)) | WIRE_RESYNC | WIRE_NRZI | WIRE_STUFF(6) |
-                 WIRE_DIFF | WIRE_RX_PACKET | WIRE_TAIL(1);      /* EOP: SE0 SE0, then J driven by TAIL */
-    w->PINS    = WIRE_PINS(dm_pin, dm_pin, dp_pin) | WIRE_GATE_PIN(dp_pin);
-    wire_crc(w, 0x8005u, 16, 0xFFFFu, 1, 16);       /* CRC16; RX skips SYNC and PID */
-    w->TURN    = USB_TURN;
-    w->TXATTR  = 0;
-    w->CTRL    = WIRE_EN | WIRE_TX | WIRE_RX | WIRE_IDLE_HIGH | WIRE_RX_ASYNC | WIRE_OE_FRAME |
-                 WIRE_EVENTS | WIRE_LEN(8);
+    usb_line_init(w, dm_pin, dp_pin, PG_BIT_FIX8(1500000), USB_TURN(1500000));
+}
+
+static inline void usb_fs_init(pg_wire_t *w, int dm_pin, int dp_pin)
+{
+    usb_line_init(w, dp_pin, dm_pin, PG_BIT_FIX8(12000000), USB_TURN(12000000));
 }
 
 static inline void usb__eop(pg_wire_t *w)
@@ -627,8 +659,8 @@ static inline void usb_queue_handshake(pg_wire_t *w, uint8_t pid)
 }
 
 /* RXMATCH presets: reply only to a DATA packet, or only to an IN token */
-#define USB_MATCH_DATA  WIRE_MATCH(1, 0x03, 0x03)   /* DATA0/1/2/MDATA: PID bits 1:0 = 11 */
-#define USB_MATCH_IN    WIRE_MATCH(1, USB_PID_IN, 0xFF)
+#define USB_MATCH_DATA  WIRE_MATCH(0, 0x03, 0x03)   /* DATA0/1/2/MDATA: PID bits 1:0 = 11 */
+#define USB_MATCH_IN    WIRE_MATCH(0, USB_PID_IN, 0xFF)
 
 /* CRC5 of a token's 11 address/endpoint bits, as the 5-bit field sent after them */
 static inline uint32_t usb_crc5(uint32_t bits11)
@@ -685,7 +717,22 @@ static inline void eth_send(pg_wire_t *w, const uint8_t *f, uint32_t n)
     }
 }
 
-/* 10BASE-T receive: RD (one comparator output, idle low) on a full engine.
+/* Normal link pulse (NLP): TD+ high for one bit time (100 ns), as a 1-bit NRZ
+ * word on the differential pair; send one every 16 ms (+/- 8 ms) while idle,
+ * or a link partner reports no link. Call between frames. */
+static inline void eth_link_pulse(pg_wire_t *w)
+{
+    wire_flush(w);
+    uint32_t c2 = w->CTRL2;
+    w->CTRL2 = c2 & ~WIRE_MANCHESTER & ~WIRE_TAIL(3);
+    w->TXATTR = WIRE_A_NOCRC | WIRE_A_NOSTUFF;
+    wire_putn(w, 1, 1u);
+    wire_flush(w);
+    w->CTRL2 = c2;
+    w->TXATTR = 0;
+}
+
+/* 10BASE-T receive: RD (one comparator output, idle low) on engine 1 (W1).
  * The engine decodes Manchester by edge timing, hunts for the SFD (0xD5),
  * delivers the frame as 16-bit words and runs the CRC-32 over it, FCS
  * included; a good frame leaves the residual ETH_CRC_RESIDUAL. Independent

@@ -5,7 +5,7 @@ uio_out changes, so slow protocols cost little Python time. Records
 (time_ns, level) for every change of the chosen bit."""
 
 import cocotb
-from cocotb.triggers import Edge
+
 from cocotb.utils import get_sim_time
 
 from .pins import bit
@@ -32,7 +32,7 @@ class EdgeRecorder:
 
     async def _run(self):
         while True:
-            await Edge(self.sig)
+            await self.sig.value_change
             v = self._read()
             if v is not None and v != self.level:
                 self.edges.append((get_sim_time("ns"), v))
