@@ -130,3 +130,83 @@ class LinBus:
                 d = bytes([await self._get_byte() for _ in range(self.lengths[i])])
                 c = await self._get_byte()
                 self.frames.append((i, d, c == checksum(d, start)))
+
+
+class LinMaster:
+    """Independent LIN master for testing a slave, from the same standard:
+    sends headers (13-bit BREAK, 1-bit delimiter, sync 0x55, PID) and either
+    publishes data + checksum or reads the slave's response from the bus.
+    The bus is the wired AND of the master's output and the chip's TXD; the
+    chip's RXD follows the bus. Frames read back are checked bit by bit."""
+
+    def __init__(self, dut, txd_uo, rxd_ui, bit_cycles):
+        self.dut, self.txd, self.rxd, self.bit = dut, txd_uo, rxd_ui, bit_cycles
+        self.ui = ui_pins(dut)
+        self.out = 1
+        self.bus = 1
+        self.ui.set(rxd_ui, 1)
+
+    def start(self):
+        self._task = cocotb.start_soon(self._wire())
+
+    def stop(self):
+        self._task.cancel()
+
+    async def _wire(self):
+        while True:
+            await RisingEdge(self.dut.clk)
+            await ReadOnly()
+            self.bus = bit(self.dut.uo_out, self.txd) & self.out
+            await RisingEdge(self.dut.clk)
+            self.ui.set(self.rxd, self.bus)
+
+    async def _drive(self, v, bits):
+        self.out = v
+        await ClockCycles(self.dut.clk, round(bits * self.bit))
+
+    async def _send(self, b):
+        for v in [0] + [(b >> i) & 1 for i in range(8)] + [1]:
+            await self._drive(v, 1)
+
+    async def _read(self, timeout_bits):
+        """One byte from the bus (sampled mid-bit), or None on timeout."""
+        n = 0
+        while self.bus != 0:
+            await ClockCycles(self.dut.clk, 2)
+            n += 2
+            if n > timeout_bits * self.bit:
+                return None
+        await ClockCycles(self.dut.clk, round(self.bit * 1.5))
+        v = 0
+        for i in range(8):
+            v |= self.bus << i
+            await ClockCycles(self.dut.clk, round(self.bit))
+        if self.bus != 1:
+            raise AssertionError("stop bit dominant in a slave response")
+        return v
+
+    async def frame(self, fid, data=None, n_resp=0, classic=False, bad_parity=False, bad_sync=False):
+        """Send a header; publish data, or read n_resp bytes + checksum.
+        Returns (data, checksum_ok) for a response, None if nothing came."""
+        await self._drive(0, 13)                      # BREAK
+        await self._drive(1, 1)                       # delimiter
+        await self._send(0x5A if bad_sync else 0x55)
+        p = pid(fid) ^ (0x40 if bad_parity else 0)
+        await self._send(p)
+        start = 0 if classic else pid(fid)
+        if data is not None:
+            await self._drive(1, 1)                   # response space
+            for b in bytes(data) + bytes([checksum(data, start)]):
+                await self._send(b)
+            return None
+        if not n_resp:
+            await self._drive(1, 20)
+            return None
+        got = []
+        for _ in range(n_resp + 1):
+            b = await self._read(timeout_bits=14 if got else 30)
+            if b is None:
+                return None if not got else (bytes(got), False)
+            got.append(b)
+        d = bytes(got[:-1])
+        return d, got[-1] == checksum(d, start)
