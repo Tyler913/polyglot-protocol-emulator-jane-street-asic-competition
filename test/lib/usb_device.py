@@ -9,7 +9,9 @@ monitor), SETUP followed by DATA0, the host's handshake turnaround after
 our DATA (<= 7.5 bit times), bus reset length and keep-alives (an EOP at
 least every 3 ms, or the device would suspend).
 
-Endpoint 1 answers NAK the first `naks` times, then returns the reports."""
+Endpoint 1 answers NAK the first `naks` times, then returns the reports.
+At full speed (rate=12e6) the device also records every start-of-frame
+token (time, frame number) and checks its CRC5."""
 
 import cocotb
 from cocotb.triggers import ClockCycles
@@ -34,8 +36,10 @@ def crc5_ok(field16):
 
 
 class UsbKeyboard:
-    def __init__(self, bus, mon, reports, naks=2, turn_bits=3):
+    def __init__(self, bus, mon, reports, naks=2, turn_bits=3, rate=1.5e6):
         self.bus, self.mon, self.bit = bus, mon, bus.bit
+        self.rate = rate
+        self.sofs = []
         self.clk = bus.dut.clk
         self.reports = list(reports)
         self.naks = naks
@@ -63,8 +67,9 @@ class UsbKeyboard:
                 self.addr, self.config = 0, 0
             elif self.mon.cur is None:
                 self.keepalives += 1  # an EOP with no packet in front
-            if self._last_eop is not None and t - self._last_eop > 3e-3 * 1.5e6 * self.bit and self.config:
-                self.errors.append(f"bus idle for {(t - self._last_eop) / self.bit / 1500:.2f} ms: device would suspend")
+            if self._last_eop is not None and t - self._last_eop > 3e-3 * self.rate * self.bit and self.config:
+                self.errors.append(f"bus idle for {(t - self._last_eop) / self.bit / self.rate * 1e3:.2f} ms: "
+                                   "device would suspend")
             self._last_eop = t
             self._se0_since = None
 
@@ -86,6 +91,12 @@ class UsbKeyboard:
             p = await self._next_packet(seen)
             seen += 1
             b = p["bytes"]
+            if b and len(b) == 3 and b[0] == 0xA5:                 # SOF
+                field = b[1] | (b[2] << 8)
+                if not crc5_ok(field):
+                    self.errors.append(f"SOF CRC5 wrong: {b.hex()}")
+                self.sofs.append((p["start"], field & 0x7FF))
+                continue
             if not b or len(b) != 3 or b[0] not in (PID_SETUP, PID_IN, PID_OUT):
                 continue  # our own packets and handshakes are handled below
             field = b[1] | (b[2] << 8)

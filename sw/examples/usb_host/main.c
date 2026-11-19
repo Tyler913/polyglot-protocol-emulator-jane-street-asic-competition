@@ -24,7 +24,13 @@
 #include "protocol.h"
 
 #define USB W1
+#ifdef USB_FULL_SPEED                 /* examples/usb_host_fs: 12 Mbit/s, SOF every 1 ms */
+#define BIT_TICKS (PG_BIT_FIX8(12000000) >> 8)
+#define USB_INIT  usb_fs_init
+#else
 #define BIT_TICKS (PG_BIT_FIX8(1500000) >> 8)
+#define USB_INIT  usb_ls_init
+#endif
 
 static uint32_t errors, naks, last_keepalive;
 
@@ -40,9 +46,10 @@ static void tx_end(void)
 static void tx_token(uint8_t pid, uint32_t addr, uint32_t ep)
 {
     uint32_t f = addr | (ep << 7);
-    USB->TXATTR = WIRE_A_NOCRC;
+    f |= usb_crc5(f) << 11;                       /* ready before the first word goes out: */
+    USB->TXATTR = WIRE_A_NOCRC;                   /* at full speed a word lasts 64 cycles */
     wire_putn(USB, 16, 0x80u | ((uint32_t)pid << 8));
-    wire_putn(USB, 16, f | (usb_crc5(f) << 11));
+    wire_putn(USB, 16, f);
     usb__eop(USB);
     tx_end();
 }
@@ -61,6 +68,29 @@ static int rx_packet(uint8_t *buf, uint32_t max)
     return (int)n;
 }
 
+#ifdef USB_FULL_SPEED
+/* Full speed: a start-of-frame token (PID 0xA5, 11-bit frame number, CRC5)
+ * exactly every 1 ms (the spec allows +/- 0.5 us). Before each transaction:
+ * if the next SOF is due within 100 us, wait for its exact cycle and send it
+ * first, so no transaction overlaps it. last_keepalive = next SOF time. */
+static uint32_t frame;
+
+static void keepalive(void)
+{
+    if ((int32_t)(last_keepalive - now()) < (int32_t)PG_US_TO_TICKS(100)) {
+        wire_flush(USB);
+        uint32_t f = frame++ & 0x7FFu;
+        f |= usb_crc5(f) << 11;
+        wait_until(last_keepalive);
+        USB->TXATTR = WIRE_A_NOCRC;
+        wire_putn(USB, 16, 0x80u | (0xA5u << 8));
+        wire_putn(USB, 16, f);
+        usb__eop(USB);
+        tx_end();
+        last_keepalive += PG_US_TO_TICKS(1000);
+    }
+}
+#else
 static void keepalive(void)                      /* low-speed keep-alive: an EOP each frame */
 {
     if (now() - last_keepalive >= PG_US_TO_TICKS(1000)) {
@@ -70,6 +100,7 @@ static void keepalive(void)                      /* low-speed keep-alive: an EOP
         last_keepalive = now();
     }
 }
+#endif
 
 static int expect_ack(void)
 {
@@ -153,7 +184,7 @@ int main(void)
     uint32_t reset_us = PG_SHARED[0] ? PG_SHARED[0] : 10000u;
     uint32_t recover_us = PG_SHARED[1] ? 100u : 10000u;
 
-    usb_ls_init(USB, PIN_UIO(4), PIN_UIO(5));
+    USB_INIT(USB, PIN_UIO(4), PIN_UIO(5));
     /* bus reset: SE0 for reset_us (32-bit words of SE0), then the idle J */
     USB->TXATTR = WIRE_A_SE0 | WIRE_A_NOSTUFF | WIRE_A_NOCRC;
     for (uint32_t b = PG_US_TO_TICKS(reset_us) / BIT_TICKS; b; b -= b > 32u ? 32u : b)
@@ -161,7 +192,11 @@ int main(void)
     wire_flush(USB);
     USB->TXATTR = 0;
     delay_ticks(PG_US_TO_TICKS(recover_us));
+#ifdef USB_FULL_SPEED
+    last_keepalive = now() + PG_US_TO_TICKS(10);    /* first SOF */
+#else
     last_keepalive = now();
+#endif
 
     static const uint8_t get_dev[8]  = { 0x80, 6, 0, 1, 0, 0, 18, 0 };
     static const uint8_t set_addr[8] = { 0x00, 5, 3, 0, 0, 0, 0, 0 };
@@ -186,13 +221,16 @@ int main(void)
     int toggle = 0, reports = 0;
     while (reports < 2 && errors < 8u) {
         int n = in_tx(3, 1, toggle, buf);
-        if (n == -2) { delay_ticks(PG_US_TO_TICKS(100)); continue; }
+        if (n == -2) { delay_ticks(PG_US_TO_TICKS(100)); keepalive(); continue; }
         if (n < 0) continue;
         toggle ^= 1;
         if (n == 8 && buf[2]) {
             PG_SHARED[3 + reports++] = buf[0] | (buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
         }
     }
+#ifdef USB_FULL_SPEED
+    for (uint32_t t0 = now(); now() - t0 < PG_US_TO_TICKS(3000); ) keepalive();   /* idle: SOFs go on */
+#endif
     PG_SHARED[5] = naks;
     PG_SHARED[6] = errors;
     PG_SHARED[7] = 0x600D05B0u;

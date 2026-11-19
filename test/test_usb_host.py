@@ -48,3 +48,41 @@ async def test_usb_ls_host(dut):
     assert r[1] == 34 and r[2] == 0x010103, r[1:3]
     assert r[3:5] == [0x000B0002, 0x000C0000], [hex(x) for x in r[3:5]]
     assert r[5] == 2 and r[6] == 0 and r[7] == 0x600D05B0, r[5:]
+
+
+@cocotb.test()
+async def test_usb_fs_host(dut):
+    """Full speed (sw/examples/usb_host_fs, 48 MHz, 4 cycles per bit): the same
+    enumeration and polling, and a start-of-frame token every 1 ms within the
+    spec's +/- 0.5 us, frame numbers counting up."""
+    host = await start(dut, clk_ns=1000 / 48)
+    bus = UsbBus(dut, dm=4, dp=5, bit=4, full_speed=True)
+    mon = UsbMonitor(bus)
+    kbd = UsbKeyboard(bus, mon, REPORTS, naks=2, rate=12e6)
+    bus.start()
+    kbd.start()
+    await load(host, "usb_host_fs", [200, 1])
+    await host.ctrl(0x01)
+    try:
+        await wait_irq(dut, 1, timeout=3_000_000)
+    finally:
+        bus.stop()
+        kbd.stop()
+        for p in mon.packets[:6]:
+            dut._log.info(f"t={p['start']} {p['bytes'].hex()} {p['errors']}")
+    assert not bus.errors, bus.errors[:5]
+    assert not mon.errors, mon.errors[:5]
+    assert not kbd.errors, kbd.errors[:5]
+    reqs = [bytes(r[:2]) for r in kbd.requests]
+    assert reqs == [b"\x80\x06", b"\x00\x05", b"\x80\x06", b"\x80\x06", b"\x00\x09"], reqs
+    assert max(kbd.host_turnarounds) <= 7.5, kbd.host_turnarounds
+    sof_t = [t for t, _ in kbd.sofs]
+    gaps = [b - a for a, b in zip(sof_t, sof_t[1:])]
+    dut._log.info("%d SOFs, intervals %d..%d cycles (1 ms = 48000)", len(sof_t), min(gaps), max(gaps))
+    assert len(sof_t) >= 3 and all(abs(g - 48000) <= 24 for g in gaps), gaps
+    frames = [f for _, f in kbd.sofs]
+    assert frames == list(range(frames[0], frames[0] + len(frames))), frames
+    r = await read_shared(host, 0, 8)
+    assert r[0] == 0x00021209 and r[1] == 34 and r[2] == 0x010103, [hex(x) for x in r[:3]]
+    assert r[3:5] == [0x000B0002, 0x000C0000], [hex(x) for x in r[3:5]]
+    assert r[5] == 2 and r[6] == 0 and r[7] == 0x600D05B0, r[5:]
