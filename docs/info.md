@@ -17,7 +17,7 @@ Two kinds of hardware give the C program exact timing:
 
 Engine 1 also decodes Manchester by edge timing (clock recovery) and can hunt for a sync pattern, which gives 10BASE-T receive and DALI.
 
-Status: CPU, SRAM, host loader, timed GPIO, edge capture and the Wire Engines pass RTL simulation with C firmware for about 40 protocols (list in `docs/protocols.md`), among them UART, SPI, I2C, 1-Wire and PS/2 in both roles, USB 1.1 low-speed device and host and full-speed device, 10BASE-T transmit and receive, CAN 2.0A, LIN, Modbus RTU, DALI, HDLC, JTAG and SWD, judged by independent peer models (70 tests). A gate-level simulation of the routed netlist boots C programs from the SRAM.
+Status: CPU, SRAM, host loader, timed GPIO, edge capture and the Wire Engines pass RTL simulation with C firmware for about 55 protocols (list in `docs/protocols.md`), among them UART, SPI, I2C, 1-Wire, PS/2, LIN, Modbus RTU and HDLC in both roles, USB 1.1 low- and full-speed device and host, 10BASE-T transmit and receive, CAN 2.0A/2.0B, IO-Link, MIL-STD-1553B, ARINC 429, ISO 7816, quad-SPI flash, DALI, JTAG and SWD, judged by independent peer models (89 tests). A gate-level simulation of the routed netlist boots C programs from the SRAM.
 
 ### Host interface (SPI target, mode 0, SCK <= clk/8)
 
