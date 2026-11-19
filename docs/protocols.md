@@ -94,4 +94,4 @@ The chip is rated at 50 MHz. Protocols with a fixed bit rate that is not a divis
 
 ## Not covered
 
-Full-speed USB host, 10BASE-T auto-negotiation (fast link pulses), CAN FD, HDLC receive (the engine destuffs only on asynchronous RX), ISO 7816 smart cards (they need a free-running card clock, which here would have to be fed by the CPU) have no program yet.
+Full-speed USB host, 10BASE-T auto-negotiation (fast link pulses), CAN FD, HDLC receive (the engine destuffs only on asynchronous RX) and ISO 7816 smart cards (they need a free-running card clock, which here would have to be fed by the CPU) have no program yet.
