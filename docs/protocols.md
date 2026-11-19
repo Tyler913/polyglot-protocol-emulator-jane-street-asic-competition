@@ -64,6 +64,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | WS2812 LEDs | controller | `ws2812` | 242 | lite engine, 3 line bits per LED bit | `test_ws2812` |
 | DShot600 (drone ESCs) | controller | `dshot` | 252 | lite engine, 8 line bits per DShot bit | `test_pulse_codes` |
 | Futaba S.BUS (RC receiver link) | both: decode (flight controller), encode (receiver) | `sbus` | 884 | lite engine with `ser_*`: 8E2 on an inverted line, 25-byte frames found by the gap before them, 16 x 11-bit channels | `test_sbus` (parity error rejected) |
+| CRSF (ExpressLRS / TBS Crossfire) | flight controller: RC channels and link statistics in, battery telemetry out | `crsf` | 760 | lite engine with `ser_*` at 420000 baud; frames by sync byte and length, CRC-8 (0xD5) in C | `test_crsf` (500 Hz frames, bad CRC rejected) |
 | NEC infrared, with 38 kHz carrier | transmitter | `ir_nec` | 424 | lite engine draws the carrier as a bit pattern | `test_ir_nec` |
 | NEC and RC-5 infrared | receiver | `ir_rx` | 750 | capture timestamps, decoded in C with +/- 25 % tolerance | `test_ir_rx` |
 | Quadrature encoder (x4) | counter | `quadrature` | 166 | GPIO polling, edges every 0.5 us | `test_gpio_protocols` |
