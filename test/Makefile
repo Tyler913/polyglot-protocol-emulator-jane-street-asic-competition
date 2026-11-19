@@ -6,7 +6,7 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = pg_top.v pg_ahb.v pg_host_spi.v pg_sram.v pg_io.v pg_sysio.v pg_wire.v pg_fifo.v pg_rmii.v hazard3_alu.v hazard3_branchcmp.v hazard3_core.v hazard3_cpu_1port.v hazard3_csr.v hazard3_decode.v hazard3_frontend.v hazard3_instr_decompress.v hazard3_irq_ctrl.v hazard3_mul_fast.v hazard3_muldiv_seq.v hazard3_onehot_encode.v hazard3_onehot_priority.v hazard3_onehot_priority_dynamic.v hazard3_pmp.v hazard3_power_ctrl.v hazard3_priority_encode.v hazard3_regfile_1w2r.v hazard3_shift_barrel.v hazard3_triggers.v 
+PROJECT_SOURCES = pg_top.v pg_ahb.v pg_host_spi.v pg_sram.v pg_io.v pg_sysio.v pg_wire.v pg_fifo.v hazard3_alu.v hazard3_branchcmp.v hazard3_core.v hazard3_cpu_1port.v hazard3_csr.v hazard3_decode.v hazard3_frontend.v hazard3_instr_decompress.v hazard3_irq_ctrl.v hazard3_mul_fast.v hazard3_muldiv_seq.v hazard3_onehot_encode.v hazard3_onehot_priority.v hazard3_onehot_priority_dynamic.v hazard3_pmp.v hazard3_power_ctrl.v hazard3_priority_encode.v hazard3_regfile_1w2r.v hazard3_shift_barrel.v hazard3_triggers.v 
 
 ifneq ($(GATES),yes)
 
@@ -45,13 +45,11 @@ ifeq ($(SIM),verilator)
 EXTRA_ARGS += --timing -Wno-fatal -Wno-lint -Wno-style
 endif
 
-# make RMII=yes: build the RTL with the experimental RMII port (pg_rmii)
+# make RMII=yes: the experimental RMII port variant (src/variants/rmii/: pg_io
+# and pg_top with pg_rmii); the main RTL stays the hardened design
 ifeq ($(RMII),yes)
-ifeq ($(SIM),verilator)
-EXTRA_ARGS   += -DPG_RMII
-else
-COMPILE_ARGS += -DPG_RMII
-endif
+VERILOG_SOURCES := $(filter-out $(SRC_DIR)/pg_io.v $(SRC_DIR)/pg_top.v,$(VERILOG_SOURCES)) \
+                   $(SRC_DIR)/variants/rmii/pg_io.v $(SRC_DIR)/variants/rmii/pg_top.v $(SRC_DIR)/pg_rmii.v
 endif
 
 # Allow sharing configuration between design and testbench via `include`:

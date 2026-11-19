@@ -99,7 +99,7 @@ The chip is rated at 50 MHz. Protocols with a fixed bit rate that is not a divis
 
 ## Experimental: 100 Mbit/s Ethernet (RMII)
 
-The engines move at most one bit every two cycles (25 Mbit/s per lane), so 100 Mbit/s Ethernet needs hardware: `src/pg_rmii.v` is a small RMII port (two bits per 50 MHz cycle each way, preamble/SFD, CRC-32 two bits per cycle, inter-frame gap; frames stay C data). The chip clock must be the PHY's 50 MHz REF_CLK. `sw/tests/rmii_echo` echoes frames of 60 to 1514 bytes at 100 Mbit/s against an independent RMII PHY model (`make -C test RMII=yes COCOTB_TEST_MODULES=test_rmii`); C keeps up with a word every 16 cycles. One CPU serves one direction at a time: a frame that arrives while C is sending is lost (the RX overflow flag reports it). Evidence level: RTL simulation only; the port is not in the hardened layout (`RMII = 0` in `pg_top.v` unless built with `PG_RMII`).
+The engines move at most one bit every two cycles (25 Mbit/s per lane), so 100 Mbit/s Ethernet needs hardware: `src/pg_rmii.v` is a small RMII port (two bits per 50 MHz cycle each way, preamble/SFD, CRC-32 two bits per cycle, inter-frame gap; frames stay C data). The chip clock must be the PHY's 50 MHz REF_CLK. `sw/tests/rmii_echo` echoes frames of 60 to 1514 bytes at 100 Mbit/s against an independent RMII PHY model (`make -C test RMII=yes COCOTB_TEST_MODULES=test_rmii`); C keeps up with a word every 16 cycles. One CPU serves one direction at a time: a frame that arrives while C is sending is lost (the RX overflow flag reports it). Evidence level: RTL simulation only; the port is not in the hardened layout: the variant `src/variants/rmii/` (`pg_io.v` with the port, `pg_top.v` with `RMII = 1`) is used only by `make RMII=yes`.
 
 ## Not covered
 
