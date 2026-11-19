@@ -73,6 +73,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | PDM MEMS microphone | host (recording) | `pdm_mic` | 320 | SPI engine drives the microphone clock (1.04 MHz) and samples its bit stream; a third-order CIC filter in C decimates by 64 to 16.28 kHz | `test_pdm_mic` (1 kHz sine: amplitude within 0.01 %, residual 84 dB below full scale) |
 | MIDI 1.0 | sender | `midi` | 242 | UART engine at 31250 baud, running status | `test_framing` |
 | DHT22 / AM2302 temperature and humidity sensor | host | `dht22` | 458 | no engine: GPIO start pulse, then capture stamps every falling edge; a bit is 1 if its edge comes > 100 us after the previous one | `test_dht22` (negative temperature, checksum error) |
+| ISO/IEC 7816-3 smart card (T=0: SIM, bank and ID cards) | reader | `iso7816` | 851 | a lite engine shifting 0xAAAAAAAA makes the free-running card clock (C tops up its FIFO in every wait loop); open-drain I/O on a second engine with 1 etu = 372 card clocks; ATR, then a T=0 command with procedure byte and status word | `test_iso7816` (card model timed in card clocks: no clock gap allowed) |
 | HD44780 character LCD, 4-bit | controller | `hd44780` | 493 | timed GPIO: every setup/hold/pulse width on its cycle | `test_hd44780` |
 | WS2812 LEDs | controller | `ws2812` | 242 | lite engine, 3 line bits per LED bit | `test_ws2812` |
 | DShot600 (drone ESCs) | controller | `dshot` | 252 | lite engine, 8 line bits per DShot bit | `test_pulse_codes` |
@@ -97,4 +98,4 @@ The chip is rated at 50 MHz. Protocols with a fixed bit rate that is not a divis
 
 ## Not covered
 
-10BASE-T auto-negotiation (fast link pulses), CAN FD and ISO 7816 smart cards (they need a free-running card clock, which here would have to be fed by the CPU) have no program yet.
+10BASE-T auto-negotiation (fast link pulses) and CAN FD have no program yet.
