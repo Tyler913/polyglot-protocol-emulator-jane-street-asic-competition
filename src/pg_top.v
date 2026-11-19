@@ -216,7 +216,12 @@ module tt_um_tyler913_polyglot (
   wire [5:0] proto_uo;
   wire       host_irq;
 
-  pg_io #(.NUM_WIRES(4), .NUM_FULL(2)) u_io (
+`ifdef PG_RMII
+  localparam RMII = 1;                      // experimental 100 Mbit/s RMII port (pg_rmii)
+`else
+  localparam RMII = 0;
+`endif
+  pg_io #(.NUM_WIRES(4), .NUM_FULL(2), .RMII(RMII)) u_io (
       .clk    (clk),
       .rst    (~cpu_run),
       .valid  (reg_valid),

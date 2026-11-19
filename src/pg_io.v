@@ -17,6 +17,8 @@
  *   0x8000_0100 + 0x100*n  Wire Engine n (pg_wire), n = 0..NUM_WIRES-1;
  *                          engines n >= NUM_FULL are lite (pg_wire FULL = 0);
  *                          only engine 1 has the Manchester RX decoder (MRX)
+ *   0x8000_0100 + 0x100*NUM_WIRES  RMII port (pg_rmii), if RMII = 1; while
+ *                          enabled it owns uo[0..2]; its RX data is event 7
  *
  * A blocking access (full TX FIFO, empty RX FIFO, ...) holds HREADY low.
  * If it waits longer than BLK_TIMEOUT cycles it completes without effect:
@@ -32,7 +34,8 @@
 
 module pg_io #(
     parameter NUM_WIRES = 2,
-    parameter NUM_FULL  = NUM_WIRES  // engines 0..NUM_FULL-1 are full, the rest lite (FULL = 0)
+    parameter NUM_FULL  = NUM_WIRES, // engines 0..NUM_FULL-1 are full, the rest lite (FULL = 0)
+    parameter RMII      = 0          // 1: add the 100 Mbit/s RMII port
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -127,15 +130,50 @@ module pg_io #(
   endgenerate
 
   // ---------------------------------------------------------------------
+  // RMII port (optional)
+  // ---------------------------------------------------------------------
+  wire [31:0] rm_rdata;
+  wire        rm_ready, rm_en, rm_avail, rm_txen;
+  wire [1:0]  rm_txd;
+  wire        rm_sel = valid && (page == NUM_WIRES + 1);
+  generate
+    if (RMII != 0) begin : g_rmii
+      pg_rmii u_rmii (
+          .clk     (clk),
+          .rst     (rst),
+          .valid   (rm_sel),
+          .write   (write),
+          .addr    (addr[7:0]),
+          .wdata   (wdata),
+          .rdata   (rm_rdata),
+          .ready   (rm_ready),
+          .rxd     (pin_in[17:16]),
+          .crs_dv  (pin_in[18]),
+          .txd     (rm_txd),
+          .tx_en   (rm_txen),
+          .enabled (rm_en),
+          .rx_avail(rm_avail)
+      );
+    end else begin : g_no_rmii
+      assign rm_rdata = 32'd0;
+      assign rm_ready = 1'b1;
+      assign rm_en    = 1'b0;
+      assign rm_avail = 1'b0;
+      assign rm_txen  = 1'b0;
+      assign rm_txd   = 2'b00;
+    end
+  endgenerate
+
+  // ---------------------------------------------------------------------
   // Blocking timeout
   // ---------------------------------------------------------------------
   reg  [31:0] blk_limit, blk_cnt;
   reg         blk_flag;
   reg  [8:0]  ev_mask;
-  wire [8:0]  ev_pend   = {cap_ready, {(8-NUM_WIRES){1'b0}}, w_rx_avail} & ev_mask;
+  wire [8:0]  ev_pend   = {cap_ready, rm_avail, {(7-NUM_WIRES){1'b0}}, w_rx_avail} & ev_mask;
   wire        ev_rd     = sel_blk && !write && addr[3:0] == 4'h8;
   wire        ev_ready  = !ev_rd || (ev_pend != 9'd0);
-  wire        slave_ready = sys_ready && (&w_ready) && ev_ready;
+  wire        slave_ready = sys_ready && (&w_ready) && ev_ready && rm_ready;
   wire        timed_out   = valid && !slave_ready && (blk_limit != 32'd0) && (blk_cnt >= blk_limit);
 
   assign ready = slave_ready || timed_out;
@@ -171,6 +209,7 @@ module pg_io #(
     end
     for (i = 0; i < NUM_WIRES; i = i + 1)
       if (page == i[3:0] + 4'd1) rdata = w_rdata[32*i +: 32];
+    if (rm_sel) rdata = rm_rdata;
     if (!slave_ready) rdata = 32'hFFFF_FFFF;
   end
 
@@ -194,6 +233,10 @@ module pg_io #(
           p_oe[p]  = w_tx_oe[e];
         end
       end
+    end
+    if (rm_en) begin                       // RMII: TXD0, TXD1, TX_EN on uo[0..2]
+      p_out[10:8] = {rm_txen, rm_txd};
+      p_oe[10:8]  = 3'b111;
     end
     uio_out = p_out[7:0];
     uio_oe  = p_oe[7:0];

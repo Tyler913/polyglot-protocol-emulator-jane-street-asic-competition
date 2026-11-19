@@ -1204,4 +1204,50 @@ static inline int can_recv_b(pg_wire_t *w, can_frame_t *f, int ack)
     return can_parse_bits(a, nb, f);
 }
 
+/* ---- 100 Mbit/s Ethernet through an RMII PHY (experimental, pg_rmii) ---------
+ * Only in builds with the RMII port. The chip clock must be the PHY's 50 MHz
+ * REF_CLK. The hardware sends preamble, SFD and FCS and checks the received
+ * FCS; C moves frame words: one every 16 cycles, so these loops are tight.
+ * Pins: TXD0 uo[0], TXD1 uo[1], TX_EN uo[2]; RXD0 ui[0], RXD1 ui[1], CRS_DV ui[2].
+ */
+typedef struct {
+    volatile uint32_t TX, RX, RXHEAD, TXLEN, CTRL, STATUS;
+} pg_rmii_t;
+
+#define RMII        ((pg_rmii_t *)0x80000500u)
+#define RMII_END    (1u << 31)
+#define RMII_FCS_OK (1u << 16)
+#define RMII_TX_BUSY     1u
+#define RMII_TX_UNDERRUN 2u
+#define RMII_RX_OVERFLOW 4u
+
+static inline void rmii_init(void) { RMII->CTRL = 1; RMII->STATUS = RMII_TX_UNDERRUN | RMII_RX_OVERFLOW; }
+
+/* Receive a frame into buf (4-byte aligned, max bytes). Returns its length
+ * with the FCS, -1 if the FCS is wrong, -2 if it did not fit. Blocks. */
+static inline int rmii_recv(uint32_t *buf, uint32_t max)
+{
+    uint32_t n = 0, h;
+    max >>= 2;
+    while (!((h = RMII->RXHEAD) & RMII_END)) {
+        uint32_t x = RMII->RX;
+        if (n < max) buf[n] = x;
+        n++;
+    }
+    (void)RMII->RX;                                  /* pop the end entry */
+    if (n > max) return -2;
+    return (h & RMII_FCS_OK) ? (int)(h & 0xFFFFu) : -1;
+}
+
+/* Send n bytes (without FCS; at least 60 for Ethernet: pad first). */
+static inline void rmii_send(const uint32_t *f, uint32_t n)
+{
+    uint32_t words = (n + 3u) >> 2, i = 0;
+    while (RMII->STATUS & RMII_TX_BUSY) { }          /* previous frame and gap */
+    RMII->TX = f[i++];                               /* two words queued, then start */
+    if (i < words) RMII->TX = f[i++];
+    RMII->TXLEN = n;
+    while (i < words) RMII->TX = f[i++];
+}
+
 #endif /* POLYGLOT_PROTOCOL_H */
