@@ -14,8 +14,8 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | UART with automatic baud rate | receiver finds the rate | `uart_autobaud` | 198 | capture: 'U' has falling edges 2 bits apart; 8 bits measured in cycles go straight into the divider | `test_gpio_protocols` (57600, 460800, 1 Mbaud) |
 | SPI, modes 0-3, up to F/4 | controller | `spi_ram` | 674 | engine, internal clock on SCK, RX sample delay | `test_spi` |
 | SPI | target | `spi_target` | 246 | engine, external clock, chip-select gate, frame events | `test_spi` |
-| I2C 100/400 kHz | controller | `i2c_eeprom` | 954 | engine, open drain, clock stretching | `test_i2c` |
-| I2C | target | `i2c_target` | 496 | engine, START/STOP gate, SCL stretching while C decides | `test_i2c` |
+| I2C 100 kHz, 400 kHz, 1 MHz (Fast-mode Plus) | controller | `i2c_eeprom` | 954 | engine, open drain, clock stretching | `test_i2c` |
+| I2C | target (up to 1 MHz) | `i2c_target` | 496 | engine, START/STOP gate, SCL stretching while C decides | `test_i2c` |
 | I2C bus analyzer | passive | `i2c_sniff` | 190 | the target settings with TX off and 9-bit words (byte + ACK) | `test_i2c_sniff` |
 | SMBus with PEC | host | `smbus` | 1124 | I2C + CRC-8 over every byte, addresses included | `test_smbus` |
 | 1-Wire | master | `onewire` | 478 | timed GPIO only | `test_onewire` |

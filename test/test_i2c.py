@@ -9,6 +9,8 @@ open-drain bus model.
 - Target (sw/examples/i2c_target), driven by an I2C controller model:
   register writes, pointer write + repeated START + read, a NACK for another
   address; the chip may change SDA only while SCL is low.
+- Fast-mode Plus (1 MHz) both ways; as a controller the SCL low and high
+  times are checked against the Fm+ minimums (0.5 us, 0.26 us).
 """
 
 import cocotb
@@ -35,9 +37,24 @@ class TargetSdaCheck:
         self.pscl = scl
 
 
+class SclTiming:
+    """Shortest SCL low and high times while the chip drives the clock."""
+
+    def __init__(self, bus, scl):
+        self.bus, self.scl = bus, scl
+        self.prev, self.since, self.low, self.high = 1, 0, [], []
+
+    def step(self, t):
+        v = self.bus.level[self.scl]
+        if v != self.prev:
+            (self.low if self.prev == 0 else self.high).append(t - self.since)
+            self.since, self.prev = t, v
+
+
 async def eeprom_case(dut, hz, stretch):
     host = await start(dut)
     bus = OpenDrainBus(dut, pins={0, 1})
+    scl = bus.add(SclTiming(bus, scl=1))
     # Write cycle long enough for at least one NACKed poll (a real one is ~5 ms)
     ee = bus.add(I2cEeprom(bus, sda=0, scl=1, stretch=stretch, write_cycles=30 * 50_000_000 // hz))
     bus.start()
@@ -56,6 +73,7 @@ async def eeprom_case(dut, hz, stretch):
     assert bytes(ee.mem[0x10:0x18]) == DATA, f"EEPROM content {ee.mem[0x10:0x18].hex()}"
     assert back == DATA, f"read back {back.hex()}"
     assert result == 0x600D0000, f"firmware result {result:#010x}"
+    return scl
 
 
 @cocotb.test()
@@ -70,7 +88,25 @@ async def test_i2c_eeprom_100k_stretch(dut):
 
 
 @cocotb.test()
+async def test_i2c_eeprom_1m(dut):
+    """Fast-mode Plus: 1 MHz SCL, Fm+ low/high minimums."""
+    scl = await eeprom_case(dut, 1_000_000, stretch=0)
+    lo, hi = min(scl.low), min(scl.high[1:])     # the first 'high' is the idle bus
+    dut._log.info("Fm+ SCL: shortest low %d, high %d cycles", lo, hi)
+    assert lo >= 25 and hi >= 13, f"SCL low {lo}, high {hi} cycles (Fm+: >= 25, >= 13)"
+
+
+@cocotb.test()
 async def test_i2c_target(dut):
+    await target_case(dut, half=62)              # 400 kHz
+
+
+@cocotb.test()
+async def test_i2c_target_1m(dut):
+    await target_case(dut, half=25)              # 1 MHz (Fm+)
+
+
+async def target_case(dut, half):
     host = await start(dut)
     bus = OpenDrainBus(dut, pins={2, 3})
     chk = bus.add(TargetSdaCheck(bus, sda=2, scl=3))
@@ -78,7 +114,7 @@ async def test_i2c_target(dut):
     await load(host, "i2c_target")
     await host.ctrl(0x01)
     await wait_irq(dut, 1, timeout=5_000)
-    c = I2cController(bus, sda=2, scl=3, half=62)  # 400 kHz
+    c = I2cController(bus, sda=2, scl=3, half=half)
     await ClockCycles(dut.clk, 50)
 
     # Write registers 3..5
