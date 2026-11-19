@@ -56,6 +56,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | BiSS-C (absolute encoders; SSI-compatible wiring) | master | `biss` | 570 | SPI engine, mode 3 at 5 MHz, 48 clocks per frame; C finds the Start bit, so any cable delay works; CRC-6 in C | `test_biss` (cable delay 0.7 and 3.7 clock periods, CRC error found) |
 | K-line OBD-II, ISO 14230-4 (KWP2000, fast init) | scan tool | `kline` | 889 | timed GPIO for the 25 ms wake-up pattern, then a lite engine with `ser_*` at 10400 baud; tester bytes 6 ms apart, each read back from the single wire | `test_kline` (TiniL, TWuP, W5, P1..P4 checked) |
 | MIL-STD-1553B | bus controller | `mil1553` | 1214 | Manchester II and the 3-bit sync built in C as 2 Mbit/s half bits; two lite engines in lockstep drive TXA/TXB, a full engine receives RXA as packets; sync, Manchester and odd parity checked in C | `test_mil1553` (BC-to-RT, RT-to-BC, absent RT) |
+| ARINC 429 (avionics) | transmitter and receiver | `arinc429` | 582 | TX: two lite engines in lockstep send half-bit chips to the line driver's DATA A / DATA B (bipolar return-to-zero); RX: C polls the line receiver's HI/LO outputs | `test_arinc429` (half-bit and bit timing, gaps, parity, label order) |
 | Wiegand 26-bit | both: reader in, reader out | `wiegand` | 390 | GPIO polling in, timed GPIO out | `test_gpio_protocols` |
 
 ## Debug, peripherals and consumer interfaces
