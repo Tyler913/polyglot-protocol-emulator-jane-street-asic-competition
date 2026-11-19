@@ -21,6 +21,7 @@ MUT = {  # name: (program, file, old, new, test module, testcase or None, why)
     "a429":    ("arinc429", "examples/arinc429/main.c", "w | ((ser_par(w) ^ 1u) << 31)", "w | (ser_par(w) << 31)", "test_arinc429", None, "even parity"),
     "iso":     ("iso7816", "examples/iso7816/main.c", "WIRE_TX_LEVEL(CK->STATUS) < 3u", "WIRE_TX_LEVEL(CK->STATUS) < 1u", "test_iso7816", None, "card clock FIFO refilled only when empty"),
     "iso2":    ("iso7816", "examples/iso7816/main.c", "wait_ticks(16u * ETU);", "delay_ticks(16u * ETU);", "test_iso7816", None, "clock not fed during the 16-etu wait"),
+    "autoneg": ("eth_autoneg", "examples/eth_autoneg/main.c", "t += 125u * US / 2u;", "t += 140u * US / 2u;", "test_eth_autoneg", "test_autoneg_full_duplex", "FLP pulses 70 us apart"),
     "canb":    ("can_b", "../include/protocol.h", "WIRE_ACK_AT(hdr + 16u + 8u * dlc)", "WIRE_ACK_AT(hdr + 17u + 8u * dlc)", "test_can", "test_can_b_receive", "ACK one bit late"),
     "pdm":     ("pdm_mic", "examples/pdm_mic/main.c", "            i3 += i2;\n", "", "test_pdm_mic", None, "second-order CIC"),
     "hdlcrx":  ("hdlc_rx", "examples/hdlc_rx/main.c", "if (ones == 5u) { ones = 0; continue; }", "if (ones == 5u) { ones = 0; }", "test_framing", "test_hdlc_rx", "stuffed zeros kept"),

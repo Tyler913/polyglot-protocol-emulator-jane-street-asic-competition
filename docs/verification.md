@@ -66,6 +66,7 @@
 | `test_mil1553` | `mil1553` | MIL-STD-1553B remote terminal model (`lib/mil1553.py`): command/data syncs, Manchester, odd parity, TXA/TXB never driven together, BC-to-RT and RT-to-BC transfers, no response from an absent RT |
 | `test_arinc429` | `arinc429` | ARINC 429 line model (`lib/arinc429.py`): bipolar return-to-zero half-bit and bit timing (+/- 2 %), word gaps, odd parity, label order; a received parity error reported |
 | `test_iso7816` | `iso7816` | smart-card model timed in card clocks (`lib/smartcard.py`, ISO 7816-3 T=0): the clock must never pause, ATR after reset, GET CHALLENGE with procedure byte and status word, the reader's parity |
+| `test_eth_autoneg` | `eth_autoneg` | clause 28 link partner (`lib/autoneg.py`): FLP pulse width, clock and data pulse spacing, burst interval 8..24 ms, Link Code Words, acknowledge, the resolved mode (full duplex, and half duplex with a partner without it) |
 
 The default list runs in GitHub Actions on every push; the extended ones (`test_lin`, `test_modbus`, `test_dali`, `test_ir_nec`, `test_ir_rx`, `test_gpio_protocols`, `test_cec`, `test_ps2_device`, `test_onewire_slave`, `test_eth_nlp`, `test_sbus`, `test_crsf`, `test_modbus_server`, `test_lin_slave`, `test_iolink`, `test_sdi12`, `test_kline`, `test_dht22`, `test_pdm_mic`, `test_iso7816`) run locally with Verilator.
 

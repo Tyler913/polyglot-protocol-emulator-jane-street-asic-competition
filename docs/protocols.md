@@ -35,6 +35,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | 10BASE-T transmit | | `eth_tx` | 398 | engine: Manchester, differential pair, CRC-32 appended, TP_IDL | `test_eth` |
 | 10BASE-T receive | | `eth_rx` | 364 | engine 1: Manchester decoded by edge timing (clock recovery), SFD hunt, CRC-32 residual | `test_eth_rx` (50 and 60 MHz, edge jitter, sender 0.1 % off; GL) |
 | ARP + ICMP echo (ping) over 10BASE-T, with link pulses | node | `eth_ping` | 1138 | RX on engine 1, TX on engine 0, 60 MHz; a normal link pulse (one 100 ns 1-bit NRZ word) every 16 ms while idle | `test_eth_ping`, `test_eth_nlp` |
+| 10BASE-T auto-negotiation (IEEE 802.3 clause 28, fast link pulses) | both ends of the exchange | `eth_autoneg` | 884 | FLP bursts of timed 100 ns link pulses; the partner's bursts decoded from capture time stamps; ability match, acknowledge, highest common mode | `test_eth_autoneg` (full and half duplex partners) |
 
 ## Field, automotive and industrial buses
 
@@ -98,4 +99,4 @@ The chip is rated at 50 MHz. Protocols with a fixed bit rate that is not a divis
 
 ## Not covered
 
-10BASE-T auto-negotiation (fast link pulses) and CAN FD have no program yet.
+CAN FD has no program yet: its data phase runs at a second bit rate inside the frame, which the engine's single bit clock does not switch.
