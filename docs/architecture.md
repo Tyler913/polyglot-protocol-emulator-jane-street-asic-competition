@@ -105,7 +105,7 @@ Any engine can own any output pin; pins an engine does not own follow GPIO (and 
 | Item | Value | Evidence |
 |---|---|---|
 | Clock | 50 MHz rated (slow corner 1.08 V / 125 C); typical-corner slack suggests 60 MHz or more at room temperature | P&R |
-| Setup slack at 50 MHz | +0.76 ns slow corner, +8.03 ns typical; hold +0.05 ns fast corner | P&R (2026-11-18) |
+| Setup slack at 50 MHz | +2.91 ns slow corner, +9.50 ns typical; hold +0.04 ns fast corner. Setup repair runs again after global routing and continues until 3.3 ns of slack remain instead of stopping at zero (was +0.76 ns without it). A 60 MHz build still misses the slow corner by 0.6 ns, so the rating stays at 50 MHz | P&R (2026-11-19) |
 | Critical path | SRAM clock-to-output (7.64 ns slow corner) into the CPU's fetch buffer | P&R |
 | Cell area | 40,663 cells, 565,363 um^2 after synthesis (flat; 38 % of it flip-flops). A full engine is about 116k um^2, a lite one about 80k | synthesis |
 | Std-cell utilization | 63.3 % of the 8x4 tile (67.5 % with the SRAM) | P&R |

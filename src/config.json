@@ -54,6 +54,12 @@
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,
 
+  "//": "Polyglot: repair setup again after global routing, and keep repairing until 3.3 ns of",
+  "//": "slack remain (the slack a 60 MHz clock would need), instead of stopping at zero.",
+  "RUN_POST_GRT_RESIZER_TIMING": true,
+  "PL_RESIZER_SETUP_SLACK_MARGIN": 3.3,
+  "GRT_RESIZER_SETUP_SLACK_MARGIN": 3.3,
+
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,
