@@ -49,6 +49,7 @@ class SerialRx:
     def __init__(self, dut, get_line, bit, fmt, strict=True):
         self.dut, self.get_line, self.bit, self.fmt, self.strict = dut, get_line, bit, fmt, strict
         self.frames = []   # (value or None for a BREAK, start cycle)
+        self.ok = []       # per frame: parity and stop bits good
         self.errors = []
         self.t = 0
         self._task = None
@@ -100,6 +101,7 @@ class SerialRx:
             last = bits[-1]
             if not any(bits):
                 self.frames.append((None, start))        # BREAK (or a long space)
+                self.ok.append(False)
                 continue
             if bits[0] != 0:
                 self.errors.append("start bit not space at its middle")
@@ -107,13 +109,17 @@ class SerialRx:
             d = self.fmt.data
             val = sum(bits[1 + i] << i for i in range(d))
             p = 1 + d
+            good = True
             if self.fmt.parity != "N":
                 if bits[p] != self.fmt.parity_bit(val):
                     self.errors.append(f"parity error on {val:#x}")
+                    good = False
                 p += 1
             if not all(bits[p:]):
                 self.errors.append(f"stop bit missing on {val:#x}")
+                good = False
             self.frames.append((val, start))
+            self.ok.append(good)
 
 
 class SerialTx:
