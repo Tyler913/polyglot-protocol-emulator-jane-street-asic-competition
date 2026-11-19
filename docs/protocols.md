@@ -49,6 +49,8 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | SAE J2716 SENT | sensor | `sent` | 386 | lite engine, one bit per 3 us tick; a pulse of N ticks is one N-bit word | `test_pulse_codes` |
 | DMX512 | controller | `dmx512` | 220 | lite engine; BREAK + MAB is one 26-bit word | `test_dmx512` |
 | DALI (IEC 62386) | application controller | `dali` | 356 | engine 1: Manchester at 1200 bit/s both ways (MSTART for a bus idling high) | `test_dali` |
+| SDI-12 (environmental sensors) | data recorder: ?!, aI!, aM! + service request, aD0! | `sdi12` | 1243 | lite engine on one wire, driven only while a word shifts (`WIRE_OE_FRAME`), 1200 baud 7E1 negative logic; BREAK + marking as one 25-bit word | `test_sdi12` (break and marking lengths, line released before the sensor answers) |
+| BiSS-C (absolute encoders; SSI-compatible wiring) | master | `biss` | 562 | SPI engine, mode 3 at 5 MHz, 48 clocks per frame; C finds the Start bit, so any cable delay works; CRC-6 in C | `test_biss` (cable delay 0.7 and 3.7 clock periods, CRC error found) |
 | Wiegand 26-bit | both: reader in, reader out | `wiegand` | 390 | GPIO polling in, timed GPIO out | `test_gpio_protocols` |
 
 ## Debug, peripherals and consumer interfaces
