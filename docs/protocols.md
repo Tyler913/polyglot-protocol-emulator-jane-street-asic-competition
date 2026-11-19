@@ -65,6 +65,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | HDMI-CEC | initiator | `cec` | 527 | timed GPIO on an open-drain line; the follower's ACK read at 1.05 ms | `test_cec` |
 | I2S (Philips) | transmitter | `i2s` | 320 | two lite engines in lockstep: data + BCLK, and WS | `test_framing` |
 | I2S (Philips) | receiver (external BCLK/WS) | `i2s_rx` | 288 | lite engine on the external BCLK; capture of a falling WS edge aligns the words | `test_framing` |
+| PDM MEMS microphone | host (recording) | `pdm_mic` | 320 | SPI engine drives the microphone clock (1.04 MHz) and samples its bit stream; a third-order CIC filter in C decimates by 64 to 16.28 kHz | `test_pdm_mic` (1 kHz sine: amplitude within 0.01 %, residual 84 dB below full scale) |
 | MIDI 1.0 | sender | `midi` | 242 | UART engine at 31250 baud, running status | `test_framing` |
 | DHT22 / AM2302 temperature and humidity sensor | host | `dht22` | 458 | no engine: GPIO start pulse, then capture stamps every falling edge; a bit is 1 if its edge comes > 100 us after the previous one | `test_dht22` (negative temperature, checksum error) |
 | HD44780 character LCD, 4-bit | controller | `hd44780` | 493 | timed GPIO: every setup/hold/pulse width on its cycle | `test_hd44780` |
