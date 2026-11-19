@@ -47,6 +47,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | Modbus RTU | client | `modbus_master` | 1318 | UART engine; frame end = 3.5 characters of silence via the blocking-read timeout; CRC-16 in C | `test_modbus` |
 | Modbus RTU | server (16 holding registers), 19200 8E1 | `modbus_server` | 1660 | lite engine with `ser_*`; frame end by the blocking-read timeout, gaps over 1.5 characters, parity and CRC errors drop the frame; functions 03, 06, 16, exceptions 01, 02, broadcast | `test_modbus_server` |
 | HDLC (ISO 13239), synchronous | transmitter | `hdlc` | 302 | engine: zero insertion after five ones, FCS-16 appended and stuffed, flags as NOSTUFF words | `test_framing` |
+| HDLC (ISO 13239), synchronous | receiver (line clock in) | `hdlc_rx` | 538 | lite engine collects raw bits on the receive clock; C removes stuffed zeros, finds flags and aborts, checks the FCS residual | `test_framing` (bad FCS and abort reported) |
 | SAE J2716 SENT | sensor | `sent` | 386 | lite engine, one bit per 3 us tick; a pulse of N ticks is one N-bit word | `test_pulse_codes` |
 | DMX512 | controller | `dmx512` | 220 | lite engine; BREAK + MAB is one 26-bit word | `test_dmx512` |
 | DALI (IEC 62386) | application controller | `dali` | 356 | engine 1: Manchester at 1200 bit/s both ways (MSTART for a bus idling high) | `test_dali` |
@@ -94,4 +95,4 @@ The chip is rated at 50 MHz. Protocols with a fixed bit rate that is not a divis
 
 ## Not covered
 
-Full-speed USB host, 10BASE-T auto-negotiation (fast link pulses), CAN FD, HDLC receive (the engine destuffs only on asynchronous RX) and ISO 7816 smart cards (they need a free-running card clock, which here would have to be fed by the CPU) have no program yet.
+Full-speed USB host, 10BASE-T auto-negotiation (fast link pulses), CAN FD and ISO 7816 smart cards (they need a free-running card clock, which here would have to be fed by the CPU) have no program yet.

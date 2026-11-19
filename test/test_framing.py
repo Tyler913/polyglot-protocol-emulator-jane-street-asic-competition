@@ -14,11 +14,11 @@ model written from its standard:
   left/right sample."""
 
 import cocotb
-from cocotb.triggers import Timer
+from cocotb.triggers import ClockCycles, Timer
 
 from cocotb.utils import get_sim_time
 
-from lib.pins import bit
+from lib.pins import bit, ui_pins
 from lib.soc import load, read_shared, start, wait_irq
 from lib.uart import UartMonitor, bit_cycles
 
@@ -212,3 +212,56 @@ async def test_i2s_rx(dut):
     k0 = frames.index(pairs[0]) if pairs[0] in frames else None
     assert k0 is not None, f"first frame {pairs[0]} not sent"
     assert pairs == frames[k0 : k0 + n], (pairs, frames[k0 : k0 + n])
+
+
+def hdlc_encode(payload, bad_fcs=False):
+    """Bits (first on the line first) of one frame between flags: data and
+    FCS LSB first, a 0 inserted after every five consecutive ones."""
+    c = fcs16(payload) ^ (0x0001 if bad_fcs else 0)
+    data = bytes(payload) + bytes([c & 0xFF, c >> 8])
+    raw = [(b >> j) & 1 for b in data for j in range(8)]
+    out, ones = [], 0
+    for b in raw:
+        out.append(b)
+        ones = ones + 1 if b else 0
+        if ones == 5:
+            out.append(0)
+            ones = 0
+    return out
+
+
+FLAG = [0, 1, 1, 1, 1, 1, 1, 0]
+
+
+@cocotb.test()
+async def test_hdlc_rx(dut):
+    """HDLC receive (sw/examples/hdlc_rx): the engine collects raw bits on the
+    line clock, C destuffs, finds flags and aborts and checks the FCS. Stream
+    from an independent encoder: good frames (one full of stuffed bits), a
+    bad FCS, an aborted frame, shared flags between frames."""
+    host = await start(dut)
+    ui = ui_pins(dut)
+    good = [b"\x03\x00Polyglot", bytes([0xFF, 0x13, 0x7E, 0x7D, 0xFF, 0xFF, 0x3F, 0x1F, 0x00]), b"\x01\x11"]
+    bits = FLAG * 3 + hdlc_encode(good[0]) + FLAG + hdlc_encode(good[1]) + FLAG
+    bits += hdlc_encode(b"\x05\x00bad", bad_fcs=True) + FLAG
+    bits += hdlc_encode(b"\x07\x00aborted")[:30] + [1] * 9 + FLAG * 2      # abort, then idle flags
+    bits += hdlc_encode(good[2]) + FLAG * 3
+    await load(host, "hdlc_rx", [3])
+    ui.set(1, 0)
+    await host.ctrl(0x01)
+    await wait_irq(dut, 1, timeout=10_000)
+    half = 25                                         # 1 Mbit/s
+    for b in bits + FLAG * 8:
+        ui.set(0, b)                                  # data changes while RXC is low
+        await ClockCycles(dut.clk, half)
+        ui.set(1, 1)                                  # rising edge: the receiver samples
+        await ClockCycles(dut.clk, half)
+        ui.set(1, 0)
+    await wait_irq(dut, 0, timeout=10_000)
+    res = await read_shared(host, 0, 8 + 12 * 3)
+    assert res[2] == 0x600D0013, hex(res[2])
+    assert (res[3], res[4]) == (1, 1), f"aborts {res[3]}, bad FCS {res[4]}"
+    for k, f in enumerate(good):
+        n = res[8 + 12 * k]
+        got = b"".join(w.to_bytes(4, "little") for w in res[9 + 12 * k: 20 + 12 * k])[:n]
+        assert got == f, f"frame {k}: {got!r}"
