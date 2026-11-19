@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Tyler Hong
 # SPDX-License-Identifier: Apache-2.0
-"""Independent CAN 2.0A model, written from ISO 11898-1 / Bosch CAN 2.0 (not
-from the RTL): wired-AND bus (dominant 0 wins), bit stuffing after five equal
+"""Independent CAN 2.0A/2.0B model, written from ISO 11898-1 / Bosch CAN 2.0
+(not from the RTL): standard (11-bit) and extended (29-bit) identifiers,
+arbitration over the whole arbitration field (RTR, SRR and IDE included, so a
+standard frame beats an extended one with the same base ID), wired-AND bus (dominant 0 wins), bit stuffing after five equal
 bits from SOF to the end of the CRC, CRC-15 (x^15+x^14+x^10+x^8+x^7+x^4+x^3+1),
 CRC delimiter, ACK slot driven dominant by every receiver that got a good
 frame, ACK delimiter, 7-bit EOF.
@@ -20,6 +22,7 @@ from cocotb.triggers import FallingEdge
 from .pins import bit, ui_pins
 
 POLY = 0x4599
+EFF = 0x80000000  # extended identifier flag (as in Linux SocketCAN)
 
 
 def crc15(bits):
@@ -33,8 +36,15 @@ def crc15(bits):
 
 
 def frame_bits(fid, data, bad_crc=False):
-    """Unstuffed SOF..CRC bits of a standard data frame (bad_crc: last CRC bit flipped)."""
-    bits = [0] + [(fid >> (10 - i)) & 1 for i in range(11)] + [0, 0, 0]
+    """Unstuffed SOF..CRC bits of a data frame (bad_crc: last CRC bit flipped).
+    fid with EFF set: extended frame (SOF, base ID, SRR=1, IDE=1, 18-bit ID
+    extension, RTR=0, r1, r0, DLC)."""
+    if fid & EFF:
+        base, ext = (fid >> 18) & 0x7FF, fid & 0x3FFFF
+        bits = [0] + [(base >> (10 - i)) & 1 for i in range(11)] + [1, 1]
+        bits += [(ext >> (17 - i)) & 1 for i in range(18)] + [0, 0, 0]
+    else:
+        bits = [0] + [(fid >> (10 - i)) & 1 for i in range(11)] + [0, 0, 0]
     bits += [(len(data) >> (3 - i)) & 1 for i in range(4)]
     for x in data:
         bits += [(x >> (7 - i)) & 1 for i in range(8)]
@@ -209,9 +219,12 @@ class CanNode:
             if not lvl:
                 self.errors.append("ACK delimiter dominant (an ACK too long or too late)")
         elif end and n == end + 2 + 1 + 7:               # ACK delimiter + EOF
+            hdr = self.hdr()
             fid = int("".join(map(str, self.raw[1:12])), 2)
-            dlc = min(8, int("".join(map(str, self.raw[15:19])), 2))
-            data = [int("".join(map(str, self.raw[19 + 8 * i: 27 + 8 * i])), 2) for i in range(dlc)]
+            if hdr == 39:
+                fid = EFF | (fid << 18) | int("".join(map(str, self.raw[14:32])), 2)
+            dlc = min(8, int("".join(map(str, self.raw[hdr - 4:hdr])), 2))
+            data = [int("".join(map(str, self.raw[hdr + 8 * i: hdr + 8 + 8 * i])), 2) for i in range(dlc)]
             by = self.name if self.tx_bits is not None else "other"
             self.frames.append(dict(id=fid, data=data, crc_ok=self.crc_ok, acked=self.acked, by=by))
             if by == self.name:
@@ -220,11 +233,16 @@ class CanNode:
             self.idle_bits = 0
             self.idle_mark = self.bitstart
 
+    def hdr(self):
+        """SOF..DLC length: 39 for an extended frame (IDE, bit 13, recessive)."""
+        return 39 if len(self.raw) >= 14 and self.raw[13] == 1 else 19
+
     def phase(self):
         n = len(self.raw)
-        if n < 12:
+        hdr = self.hdr()
+        if n < 14 or (hdr == 39 and n < 33):   # ID, RTR/SRR, IDE (+ ID extension, RTR)
             return "arb"
-        if n < 19:
+        if n < hdr:
             return "ctrl"
         end = self.crc_end()
         if end is None or n < end - 15:
@@ -234,7 +252,8 @@ class CanNode:
         return "tail"
 
     def crc_end(self):
-        if len(self.raw) < 19:
+        hdr = self.hdr()
+        if len(self.raw) < hdr:
             return None
-        dlc = min(8, int("".join(map(str, self.raw[15:19])), 2))
-        return 19 + 8 * dlc + 15
+        dlc = min(8, int("".join(map(str, self.raw[hdr - 4:hdr])), 2))
+        return hdr + 8 * dlc + 15

@@ -24,6 +24,7 @@
  * [16 + 2k], [17 + 2k]: start and end time (NOW) of task k = CAN, SPI, UART, I2C.
  */
 
+#define CAN_STD_ONLY                /* fit in memory: 11-bit CAN identifiers only */
 #include "protocol.h"
 #include "pt.h"
 

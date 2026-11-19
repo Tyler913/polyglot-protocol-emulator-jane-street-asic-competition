@@ -10,6 +10,7 @@
  * Results: [8] 1 if acknowledged with a good CRC, [14] start, [15] end.
  */
 
+#define CAN_STD_ONLY                /* fit the job slot: 11-bit CAN identifiers only */
 #include "job.h"
 
 static uint32_t words[4], nw, x, t;

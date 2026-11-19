@@ -36,7 +36,8 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 
 | Protocol | Roles | Program | Size | How it is made | Test (model) |
 |---|---|---|---|---|---|
-| CAN 2.0A | node: send with arbitration, receive with ACK | `can`, `can_rx` | 808, 612 | engine: stuffing after 5 equal bits, CRC-15, read-back arbitration, ACK slot inside the packet | `test_can` (GL) |
+| CAN 2.0A | node: send with arbitration, receive with ACK | `can`, `can_rx` | 880, 678 | engine: stuffing after 5 equal bits, CRC-15, read-back arbitration, ACK slot inside the packet | `test_can` (GL) |
+| CAN 2.0B (29-bit identifiers, as used by SAE J1939) | node: both frame formats, send with arbitration, receive with ACK | `can_b` | 1392 | the same engine settings; C builds the 39-bit header. RX words are 20 bits long so the DLC of either format is known before the ACK slot | `test_can` (standard beats extended with the same base ID; extended DLC 0 and 1 acknowledged) |
 | LIN 2.x | master | `lin_master` | 674 | UART engine; the BREAK is one 14-bit word; every byte read back from the bus | `test_lin` |
 | Modbus RTU | client | `modbus_master` | 1318 | UART engine; frame end = 3.5 characters of silence via the blocking-read timeout; CRC-16 in C | `test_modbus` |
 | HDLC (ISO 13239), synchronous | transmitter | `hdlc` | 302 | engine: zero insertion after five ones, FCS-16 appended and stuffed, flags as NOSTUFF words | `test_framing` |

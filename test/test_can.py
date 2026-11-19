@@ -4,12 +4,14 @@
 independent CAN bus model (test/lib/can.py): stuffing, CRC-15, ACK, and
 arbitration against a second node with a lower (winning) identifier. The chip
 also acknowledges other nodes' frames (receiver ACK, sw/tests/can_rx), and
-not a frame with a bad CRC."""
+not a frame with a bad CRC. CAN 2.0B (sw/tests/can_b): 29-bit identifiers
+(SAE J1939 style) sent and received with ACK, mixed with standard frames, and
+arbitration between a standard and an extended frame with the same base ID."""
 
 import cocotb
 from cocotb.triggers import ClockCycles
 
-from lib.can import CanBus, CanNode
+from lib.can import EFF, CanBus, CanNode
 from lib.soc import F_CPU, load, read_shared, start, wait_irq
 
 BIT = F_CPU / 500_000
@@ -99,3 +101,86 @@ async def test_can_receiver_ack(dut):
     offs = [p0 - t for (p0, _), t in zip(pulses, slots)]
     dut._log.info("ACK pulse start - ACK slot start: %s cycles", offs)
     assert all(0 <= o <= BIT // 4 for o in offs), offs
+
+
+def ack_pulses(bus):
+    e = bus.chip_edges
+    return [(e[i][0], e[i + 1][0]) for i in range(len(e) - 1) if e[i][1] == 0 and e[i + 1][1] == 1]
+
+
+@cocotb.test()
+async def test_can_b_receive(dut):
+    """CAN 2.0B receiver: standard and extended frames, including extended
+    frames with DLC 0 and 1 (the DLC arrives only 16 bits before the ACK
+    slot) and one with a bad CRC; the chip must ACK exactly the good ones."""
+    host = await start(dut)
+    bus = CanBus(dut, txd_uio=0, rxd_ui=2, bit_cycles=BIT)
+    node = bus.add(CanNode(bus, "node"))
+    bus.start()
+    sent = [(0x123, [1, 2, 3], False),
+            (EFF | 0x18FEF100, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88], False),
+            (EFF | 0x0CF00400, [0xC4, 0x3B], True),
+            (EFF | 0x1FFFFFFF, [], False),
+            (EFF | 0x00000001, [0x5A], False),
+            (0x7FF, [0xFF, 0x00, 0x55, 0xAA, 0x0F, 0xF0, 0x81, 0x7E], False)]
+    await load(host, "can_b", [len(sent), 0])
+    await host.ctrl(0x01)
+    await wait_irq(dut, 1, timeout=10_000)
+    for fid, data, bad in sent:
+        node.send(fid, data, join_sof=False, bad_crc=bad)
+        for _ in range(300):
+            await ClockCycles(dut.clk, 1000)
+            if node.pending is None:
+                break
+        else:
+            raise AssertionError(f"node never finished frame {fid:#x}")
+    await wait_irq(dut, 0, timeout=50_000)
+    bus.stop()
+    assert not node.errors, node.errors[:5]
+    got = [(f["id"], f["acked"], f["crc_ok"]) for f in node.frames]
+    assert got == [(fid, not bad, not bad) for fid, _, bad in sent], f"node saw {[(hex(a), b, c) for a, b, c in got]}"
+    res = await read_shared(host, 0, 2 + 3 * len(sent))
+    assert res[0] == 0x600D0006 and res[1] == len(sent), [hex(x) for x in res[:2]]
+    def first4(word, dlc):  # bytes beyond the DLC are left over from earlier frames
+        return word & ((1 << (8 * min(dlc, 4))) - 1)
+    chip = [(res[2 + 3 * k], res[3 + 3 * k] & 0xFF, res[3 + 3 * k] >> 8, first4(res[4 + 3 * k], res[3 + 3 * k] & 0xFF))
+            for k in range(len(sent))]
+    want = [(fid, len(d), int(not bad), sum(b << (8 * i) for i, b in enumerate(d[:4]))) for fid, d, bad in sent]
+    assert chip == want, f"chip received {[[hex(v) for v in c] for c in chip]}"
+    pulses = ack_pulses(bus)
+    assert len(pulses) == 5, pulses
+    assert all(abs((b - a) - BIT) <= 1 for a, b in pulses), pulses
+    slots = [t for t, (_, _, bad) in zip(node.ack_slots, sent) if not bad]
+    offs = [p0 - t for (p0, _), t in zip(pulses, slots)]
+    dut._log.info("2.0B ACK pulse start - ACK slot start: %s cycles", offs)
+    assert all(0 <= o <= BIT // 4 for o in offs), offs
+
+
+@cocotb.test()
+async def test_can_b_arbitration(dut):
+    """The chip sends an extended frame (J1939 EEC1, 0x0CF00400); the node
+    joins its SOF with a standard frame whose ID equals the extended frame's
+    base ID. Both match through the 11 ID bits; the standard frame's
+    dominant RTR beats the extended frame's recessive SRR. The chip must
+    lose there, receive and ACK the winner, then resend and be ACKed."""
+    host = await start(dut)
+    bus = CanBus(dut, txd_uio=0, rxd_ui=2, bit_cycles=BIT)
+    node = bus.add(CanNode(bus, "node"))
+    eid = EFF | 0x0CF00400
+    base = (eid >> 18) & 0x7FF
+    node.send(base, [0xAB, 0xCD], join_sof=True)
+    bus.start()
+    await load(host, "can_b", [1, eid])
+    await host.ctrl(0x01)
+    await wait_irq(dut, 1, timeout=10_000)
+    await wait_irq(dut, 0, timeout=300_000)
+    await ClockCycles(dut.clk, 200)
+    bus.stop()
+    assert not node.errors, node.errors[:5]
+    order = [(f["id"], f["by"], f["acked"], f["crc_ok"]) for f in node.frames]
+    assert order == [(base, "node", True, True), (eid, "other", True, True)], f"bus order {order}"
+    assert node.frames[1]["data"] == [0x10 + 0x11 * i for i in range(8)], node.frames[1]["data"]
+    res = await read_shared(host, 0, 22)
+    assert res[0] == 0x600D0006 and res[1] == 1, [hex(x) for x in res[:2]]
+    assert (res[2], res[3], res[4] & 0xFFFF) == (base, 0x102, 0xCDAB), [hex(x) for x in res[2:5]]
+    assert res[20] == 2 and res[21] == 1, f"attempts {res[20]}, acked {res[21]}"

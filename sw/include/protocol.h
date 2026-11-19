@@ -912,7 +912,7 @@ static inline uint32_t jtag_shift(pg_wire_t *w, int tms_pin, uint32_t tdi, int n
     return r;
 }
 
-/* ---- CAN 2.0A (11-bit identifiers): frame layer ----------------------------
+/* ---- CAN 2.0A/2.0B: frame layer --------------------------------------------
  * NRZ with stuffing after five equal bits, CRC-15 and arbitration by
  * read-back are done by the engine; frames are built and parsed in C. TX goes
  * to a transceiver's TXD (push-pull, recessive = 1), RX comes from RXD. Put
@@ -922,7 +922,14 @@ static inline uint32_t jtag_shift(pg_wire_t *w, int tms_pin, uint32_t tdi, int n
  * engine compares every stuffed bit it sends with RXD and stops driving if a
  * recessive bit reads dominant (lost arbitration). The receiver also sees
  * the chip's own frames, which gives the ACK bit.
+ * Identifiers with CAN_EFF set are 29-bit extended identifiers (CAN 2.0B, used
+ * by SAE J1939); can_send and can_parse handle both formats. To receive
+ * extended frames with ACK, use can_init_b / can_recv_b (20-bit RX words).
+ * Define CAN_STD_ONLY before including this header to leave out the
+ * extended-frame parsing where memory is tight.
  */
+
+#define CAN_EFF 0x80000000u    /* extended (29-bit) identifier flag, as in Linux SocketCAN */
 
 /* fix8: the bit period in 1/256 cycles (PG_BIT_FIX8(bitrate)) */
 static inline void can_init_fix8(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t fix8)
@@ -944,11 +951,22 @@ static inline void can_init(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t bit
 }
 
 /* Queue a data frame (0..8 bytes). The engine sends it at once; it needs
- * at most 4 FIFO words. */
+ * at most 4 FIFO words (5 for an extended frame with more than 4 bytes: the
+ * last write waits for room). */
 static inline void can_send(pg_wire_t *w, uint32_t id, const uint8_t *d, uint32_t n)
 {
-    w->TXATTR = WIRE_A_CRC_INIT | (n ? 0u : WIRE_A_CRC_OUT);
-    wire_putn(w, 19, ((id & 0x7FFu) << 7) | (n & 15u));     /* SOF, ID, RTR, IDE, r0, DLC */
+#ifndef CAN_STD_ONLY
+    if (id & CAN_EFF) {
+        w->TXATTR = WIRE_A_CRC_INIT;                /* SOF, base ID, SRR, IDE, extended ID */
+        wire_putn(w, 32, (((id >> 18) & 0x7FFu) << 20) | (3u << 18) | (id & 0x3FFFFu));
+        w->TXATTR = n ? 0u : WIRE_A_CRC_OUT;
+        wire_putn(w, 7, n & 15u);                   /* RTR, r1, r0, DLC */
+    } else
+#endif
+    {
+        w->TXATTR = WIRE_A_CRC_INIT | (n ? 0u : WIRE_A_CRC_OUT);
+        wire_putn(w, 19, ((id & 0x7FFu) << 7) | (n & 15u)); /* SOF, ID, RTR, IDE, r0, DLC */
+    }
     for (uint32_t i = 0; i < n; ) {
         uint32_t k = n - i < 4u ? n - i : 4u, x = 0;
         for (uint32_t j = 0; j < k; j++) x = (x << 8) | d[i + j];
@@ -972,6 +990,8 @@ typedef struct {
  * 32 bits each, at most 4 kept), nw how many data words arrived in all, end_marker
  * the RX FIFO end marker. Returns 0, or -1 if the frame was too short. Use it to
  * receive without blocking: collect words while wire_rx_count() > 0, then parse. */
+static inline int can_parse_bits(const uint32_t *words, uint32_t nbits, can_frame_t *f);
+
 static inline int can_parse(const uint32_t *words, uint32_t nw, uint32_t end_marker, can_frame_t *f)
 {
     /* Bit i of the frame (SOF = bit 0) is bit 31 - (i & 31) of words[i >> 5]. Fields are
@@ -979,10 +999,23 @@ static inline int can_parse(const uint32_t *words, uint32_t nw, uint32_t end_mar
      * frame takes well under 1000 cycles (cooperative tasks rely on short steps). */
     uint32_t nbits = (nw > 0 ? nw - (WIRE_END_BITS(end_marker) ? 1u : 0u) : 0u) * 32u +
                      WIRE_END_BITS(end_marker);
+    return can_parse_bits(words, nbits, f);
+}
+
+/* The same on nbits frame bits packed MSB first into 32-bit words. */
+static inline int can_parse_bits(const uint32_t *words, uint32_t nbits, can_frame_t *f)
+{
     if (nbits < 19u) return -1;
-    uint32_t dlc = (words[0] >> 13) & 15u;          /* bits 15..18 */
+#ifdef CAN_STD_ONLY                                /* 11-bit identifiers only: smaller code */
+    uint32_t ide = 0;
+#else
+    uint32_t ide = (words[0] >> 18) & 1u;          /* bit 13 */
+#endif
+    uint32_t hdr = ide ? 39u : 19u;                /* SOF .. DLC */
+    if (nbits < hdr) return -1;
+    uint32_t dlc = (ide ? words[1] >> 25 : words[0] >> 13) & 15u;   /* bits hdr-4 .. hdr-1 */
     if (dlc > 8) dlc = 8;
-    uint32_t end = 19u + 8u * dlc;                 /* CRC field starts here */
+    uint32_t end = hdr + 8u * dlc;                 /* CRC field starts here */
     if (nbits < end + 15u + 2u) return -1;
     uint32_t crc = 0;                              /* CRC-15 over SOF..data, then the CRC: residual 0 */
     for (uint32_t k = 0, n = end + 15u; n; k++) {
@@ -996,9 +1029,10 @@ static inline int can_parse(const uint32_t *words, uint32_t nw, uint32_t end_mar
         }
     }
     f->id = (words[0] >> 20) & 0x7FFu;             /* bits 1..11 */
+    if (ide) f->id = (f->id << 18) | (words[0] & 0x3FFFFu) | CAN_EFF;   /* + bits 14..31 */
     f->dlc = (uint8_t)dlc;
     for (uint32_t b = 0; b < dlc; b++) {
-        uint32_t pos = 19u + 8u * b, sh = pos & 31u, v = words[pos >> 5] << sh;
+        uint32_t pos = hdr + 8u * b, sh = pos & 31u, v = words[pos >> 5] << sh;
         if (sh > 24u) v |= words[(pos >> 5) + 1u] >> (32u - sh);
         f->data[b] = (uint8_t)(v >> 24);
     }
@@ -1011,9 +1045,9 @@ static inline int can_parse(const uint32_t *words, uint32_t nw, uint32_t end_mar
  * a dominant bit queued as an AFTER_RX word goes out at the ACK slot, half a
  * bit after the CRC delimiter is sampled, only if the CRC checks (ACKBIT).
  * Not for our own frame; after a lost arbitration the rest of ours is dropped. */
-static inline void can_ack_arm(pg_wire_t *w, uint32_t word0)
+static inline void can_ack_arm_at(pg_wire_t *w, uint32_t dlc, uint32_t hdr)
 {
-    uint32_t st = w->STATUS, dlc = (word0 >> 13) & 15u;
+    uint32_t st = w->STATUS;
     if (dlc > 8u) dlc = 8u;
     if (st & WIRE_TX_ACTIVE) {
         if (!(st & WIRE_ARB_LOST)) return;        /* our own frame */
@@ -1023,7 +1057,12 @@ static inline void can_ack_arm(pg_wire_t *w, uint32_t word0)
     w->TXATTR = WIRE_A_AFTER_RX | WIRE_A_NOSTUFF | WIRE_A_NOCRC;
     wire_putn(w, 1, 0u);
     w->TXATTR = 0;
-    w->ACKBIT = WIRE_ACK_AT(35u + 8u * dlc);      /* SOF..DLC 19, data, CRC 15, delimiter */
+    w->ACKBIT = WIRE_ACK_AT(hdr + 16u + 8u * dlc); /* SOF..DLC, data, CRC 15, delimiter */
+}
+
+static inline void can_ack_arm(pg_wire_t *w, uint32_t word0)
+{
+    can_ack_arm_at(w, (word0 >> 13) & 15u, 19u);
 }
 
 /* Receive one frame (blocks). ack = 1: acknowledge frames from other nodes
@@ -1055,6 +1094,47 @@ static inline int can_recv(pg_wire_t *w, can_frame_t *f)
         nw++;
     }
     return can_parse(words, nw, w32, f);
+}
+
+/* CAN 2.0B receiver: standard and extended frames. RX words are 20 bits long,
+ * so the DLC is complete in word 0 (standard, bits 15..18) or word 1
+ * (extended, bits 35..38) well before the ACK slot, even for the shortest
+ * frames; can_recv_b packs the words into 32-bit ones for can_parse_bits.
+ * can_send works unchanged. */
+static inline void can_init_b(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t bitrate)
+{
+    can_init_fix8(w, txd_pin, rxd_pin, PG_BIT_FIX8(bitrate));
+    w->CTRL = (w->CTRL & ~WIRE_LEN(32)) | WIRE_LEN(20);
+}
+
+/* Receive one frame (blocks). ack = 1: acknowledge frames from other nodes
+ * (full engines). Returns 0, or -1 if the frame was too short. */
+static inline int can_recv_b(pg_wire_t *w, can_frame_t *f, int ack)
+{
+    uint32_t a[4] = {0, 0, 0, 0}, nb = 0, nw = 0, w0 = 0, x;
+    for (;;) {
+        x = wire_get(w);
+        if (WIRE_IS_END(x)) break;
+        if (ack) {                                  /* IDE = bit 13 = bit 6 of word 0 */
+            if (nw == 0 && !((x >> 6) & 1u)) can_ack_arm_at(w, (x >> 1) & 15u, 19u);
+            if (nw == 1 && ((w0 >> 6) & 1u)) can_ack_arm_at(w, (x >> 1) & 15u, 39u);
+        }
+        if (nw == 0) w0 = x;
+        uint32_t k = nb >> 5, s = nb & 31u;         /* append 20 bits MSB first */
+        x &= 0xFFFFFu;
+        if (k < 4u) {
+            if (s <= 12u) a[k] |= x << (12u - s);
+            else {
+                a[k] |= x >> (s - 12u);
+                if (k < 3u) a[k + 1u] |= x << (44u - s);
+            }
+        }
+        nb += 20u;
+        nw++;
+    }
+    if (ack && WIRE_TX_LEVEL(w->STATUS)) wire_tx_discard(w);   /* CRC bad: the ACK stayed queued */
+    if (WIRE_END_BITS(x)) nb -= 20u - WIRE_END_BITS(x);       /* partial last word */
+    return can_parse_bits(a, nb, f);
 }
 
 #endif /* POLYGLOT_PROTOCOL_H */
