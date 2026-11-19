@@ -42,6 +42,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | CAN 2.0B (29-bit identifiers, as used by SAE J1939) | node: both frame formats, send with arbitration, receive with ACK | `can_b` | 1392 | the same engine settings; C builds the 39-bit header. RX words are 20 bits long so the DLC of either format is known before the ACK slot | `test_can` (standard beats extended with the same base ID; extended DLC 0 and 1 acknowledged) |
 | LIN 2.x | master | `lin_master` | 674 | UART engine; the BREAK is one 14-bit word; every byte read back from the bus | `test_lin` |
 | Modbus RTU | client | `modbus_master` | 1318 | UART engine; frame end = 3.5 characters of silence via the blocking-read timeout; CRC-16 in C | `test_modbus` |
+| Modbus RTU | server (16 holding registers), 19200 8E1 | `modbus_server` | 1660 | lite engine with `ser_*`; frame end by the blocking-read timeout, gaps over 1.5 characters, parity and CRC errors drop the frame; functions 03, 06, 16, exceptions 01, 02, broadcast | `test_modbus_server` |
 | HDLC (ISO 13239), synchronous | transmitter | `hdlc` | 302 | engine: zero insertion after five ones, FCS-16 appended and stuffed, flags as NOSTUFF words | `test_framing` |
 | SAE J2716 SENT | sensor | `sent` | 386 | lite engine, one bit per 3 us tick; a pulse of N ticks is one N-bit word | `test_pulse_codes` |
 | DMX512 | controller | `dmx512` | 220 | lite engine; BREAK + MAB is one 26-bit word | `test_dmx512` |
