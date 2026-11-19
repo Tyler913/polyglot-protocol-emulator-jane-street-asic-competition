@@ -22,6 +22,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | 1-Wire (DS18B20-style) | device | `onewire_slave` | 729 | capture stamps each slot's falling edge; read-0 pulls low at once, timed GPIO releases it; READ/MATCH/SKIP/SEARCH ROM | `test_onewire_slave` |
 | MDIO (IEEE 802.3 clause 22) | management station | `mdio` | 272 | lite engine; reads release MDIO and clock in the turnaround + data | `test_mdio` |
 | SD card, SPI mode | host | `sd_spi` | 1210 | SPI engine whose CRC unit appends each command's CRC7; data CRC16 in C | `test_sd_spi` |
+| Quad-SPI NOR flash (W25Q-style, 0x6B Fast Read Quad Output) | host | `qspi_flash` | 548 | all four engines as one 4-bit port: engine 0 sends command and address and clocks SCK, engines 1..3 receive IO1..IO3 on SCK as an external clock; IO0 released for the dummy clocks; C interleaves the nibbles | `test_qspi_flash` (bus contention checked) |
 
 ## USB and Ethernet
 
