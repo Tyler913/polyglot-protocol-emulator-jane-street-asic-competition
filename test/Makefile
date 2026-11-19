@@ -58,7 +58,7 @@ TOPLEVEL = tb
 ifneq ($(GATES),yes)
 TESTS_DEFAULT = test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_i2c_sniff,test_sd_spi,test_usb,test_usb_hid,test_usb_host,test_eth,test_eth_rx,test_eth_ping,test_ws2812,test_pulse_codes,test_framing,test_mdio,test_smbus,test_dmx512,test_hd44780,test_onewire,test_can,test_swd,test_jtag,test_ps2,test_quad,test_mixed,test_queue
 # Slow at real protocol speeds (milliseconds of bus time): make EXTENDED=yes, best with SIM=verilator
-TESTS_EXTENDED = test_lin,test_modbus,test_dali,test_ir_nec,test_ir_rx,test_gpio_protocols,test_cec,test_ps2_device,test_onewire_slave,test_eth_nlp
+TESTS_EXTENDED = test_lin,test_modbus,test_dali,test_ir_nec,test_ir_rx,test_gpio_protocols,test_cec,test_ps2_device,test_onewire_slave,test_eth_nlp,test_sbus
 ifeq ($(EXTENDED),yes)
 COCOTB_TEST_MODULES ?= $(TESTS_DEFAULT),$(TESTS_EXTENDED)
 else

@@ -2,6 +2,8 @@
 
 Every protocol below is a C program in `sw/examples/` or `sw/tests/` (stock GCC, `protocol.h`) running on the RTL, and every one is judged by an independent model of the other side written from the protocol's specification or a datasheet (`test/lib/`), not from our RTL. Evidence level for all rows: **RTL simulation** (Icarus and Verilator); the rows marked GL also pass gate-level simulation of the routed netlist.
 
+Any asynchronous serial format (5 to 9 data bits, parity, 1 or 2 stop bits, inverted line) is a `ser_*` setting in C, since the engine shifts whole frames.
+
 Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for program, data and stack. "Engine" means a Wire Engine; "timed GPIO" means the queue that changes pins on exact cycles; "capture" means the edge-timestamp unit.
 
 ## Standard serial buses
@@ -61,6 +63,7 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | HD44780 character LCD, 4-bit | controller | `hd44780` | 493 | timed GPIO: every setup/hold/pulse width on its cycle | `test_hd44780` |
 | WS2812 LEDs | controller | `ws2812` | 242 | lite engine, 3 line bits per LED bit | `test_ws2812` |
 | DShot600 (drone ESCs) | controller | `dshot` | 252 | lite engine, 8 line bits per DShot bit | `test_pulse_codes` |
+| Futaba S.BUS (RC receiver link) | both: decode (flight controller), encode (receiver) | `sbus` | 884 | lite engine with `ser_*`: 8E2 on an inverted line, 25-byte frames found by the gap before them, 16 x 11-bit channels | `test_sbus` (parity error rejected) |
 | NEC infrared, with 38 kHz carrier | transmitter | `ir_nec` | 424 | lite engine draws the carrier as a bit pattern | `test_ir_nec` |
 | NEC and RC-5 infrared | receiver | `ir_rx` | 750 | capture timestamps, decoded in C with +/- 25 % tolerance | `test_ir_rx` |
 | Quadrature encoder (x4) | counter | `quadrature` | 166 | GPIO polling, edges every 0.5 us | `test_gpio_protocols` |

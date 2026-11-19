@@ -398,6 +398,73 @@ static inline int uart_getc(pg_wire_t *w)
     return (int)((f >> 1) & 0xFFu);
 }
 
+/* ---- Asynchronous serial with any frame format ------------------------------
+ * The engine shifts whole frames, so the data bits (5..9), parity and stop
+ * bits are all chosen in C. An inverted line (idle low, e.g. SBUS, SDI-12)
+ * just clears WIRE_IDLE_HIGH: RX then starts on a rising edge and words
+ * arrive inverted, which ser_decode undoes; ser_encode inverts TX words.
+ */
+#define SER_NONE 0u
+#define SER_EVEN 1u
+#define SER_ODD  2u
+
+typedef struct { uint8_t data, parity, stop, invert; } ser_fmt_t;
+
+#define SER_FMT(data, parity, stop, invert) ((ser_fmt_t){ (data), (parity), (stop), (invert) })
+
+static inline uint32_t ser_bits(ser_fmt_t f) { return 1u + f.data + (f.parity ? 1u : 0u) + f.stop; }
+
+static inline uint32_t ser_par(uint32_t x)        /* 1 if x has an odd number of ones */
+{
+    x ^= x >> 16; x ^= x >> 8; x ^= x >> 4; x ^= x >> 2; x ^= x >> 1;
+    return x & 1u;
+}
+
+/* Frame word, start bit first (LSB) */
+static inline uint32_t ser_encode(ser_fmt_t f, uint32_t v)
+{
+    uint32_t n = f.data;
+    v &= (1u << n) - 1u;
+    uint32_t w = v << 1;
+    if (f.parity) w |= (ser_par(v) ^ (f.parity == SER_ODD)) << (++n);
+    w |= ((1u << f.stop) - 1u) << (n + 1u);
+    return f.invert ? w ^ ((1u << ser_bits(f)) - 1u) : w;
+}
+
+/* Data of a received frame word, or -1 (start, parity or stop bit wrong;
+ * a BREAK, all space, also gives -1: see ser_is_break). */
+static inline int ser_decode(ser_fmt_t f, uint32_t w)
+{
+    uint32_t nb = ser_bits(f), p = 1u + f.data;
+    if (f.invert) w ^= (1u << nb) - 1u;
+    uint32_t v = (w >> 1) & ((1u << f.data) - 1u);
+    if (w & 1u) return -1;
+    if (f.parity) {
+        if (((w >> p) & 1u) != (ser_par(v) ^ (f.parity == SER_ODD))) return -1;
+        p++;
+    }
+    if (((w >> p) & ((1u << f.stop) - 1u)) != (1u << f.stop) - 1u) return -1;
+    return (int)v;
+}
+
+/* A frame word that is all space (logic 0), stop bits included: a BREAK */
+static inline int ser_is_break(ser_fmt_t f, uint32_t w)
+{
+    return ((f.invert ? ~w : w) & ((1u << ser_bits(f)) - 1u)) == 0u;
+}
+
+static inline void ser_init(pg_wire_t *w, int tx_pin, int rx_pin, uint32_t baud, ser_fmt_t f)
+{
+    uint32_t fix8 = PG_BIT_FIX8(baud);
+    wire_config(w, (wire_cfg_t){ WIRE_EN | WIRE_TX | WIRE_RX | WIRE_RX_ASYNC | WIRE_LEN(ser_bits(f)) |
+                                 (f.invert ? 0u : WIRE_IDLE_HIGH),
+                                 fix8 >> 8, WIRE_PINS(tx_pin, rx_pin, 0), WIRE_FRAC(fix8) | WIRE_RESYNC });
+}
+
+static inline void ser_putc(pg_wire_t *w, ser_fmt_t f, uint32_t v) { wire_putn(w, (int)ser_bits(f), ser_encode(f, v)); }
+
+static inline int ser_getc(pg_wire_t *w, ser_fmt_t f) { return ser_decode(f, w->RX); }
+
 /* ---- SPI controller: just parameters ----------------------------------------
  * 8-bit words, MSB first, internal bit clock driven on SCK. Mode 0..3 sets
  * CPOL/CPHA. RX samples MISO in step with each bit. Chip select is a GPIO.
