@@ -65,12 +65,12 @@ def main(reader, master_prefix, layer, width, pitch, offset, spacing, region, ha
             for w in sw.getWires():
                 if w.isVia():
                     bv = w.getBlockVia()
-                    if bv is not None and (w.xMin() + w.xMax()) // 2 > rx1:
+                    if bv is not None and not rx0 <= (w.xMin() + w.xMax()) // 2 <= rx1:
                         cut = bv.getName().split("_")[0] + "_" + bv.getName().split("_")[1]   # e.g. via1_2
                         per = stack.setdefault(name, {}).setdefault(cut, {})
                         n, _ = per.get(bv.getName(), (0, bv))
                         per[bv.getName()] = (n + 1, bv)
-                elif layer_name(w) == layer and w.yMax() - w.yMin() > w.xMax() - w.xMin() and w.xMin() > rx1:
+                elif layer_name(w) == layer and w.yMax() - w.yMin() > w.xMax() - w.xMin() and (w.xMin() > rx1 or w.xMax() < rx0):
                     ylo = w.yMin() if ylo is None else min(ylo, w.yMin())
                     yhi = w.yMax() if yhi is None else max(yhi, w.yMax())
     if ylo is None or not stack.get("VPWR") or not stack.get("VGND"):

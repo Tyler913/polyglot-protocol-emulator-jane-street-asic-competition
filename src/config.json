@@ -21,7 +21,7 @@
 
   "//": "PL_TARGET_DENSITY_PCT - You can increase this if Global Placement fails with error GPL-0302.",
   "//": "Users have reported that values up to 80 worked well for them.",
-  "//": "Polyglot: 68 with four Wire Engines (std-cell utilization about 62 %); global routing then has almost no overflow.",
+  "//": "Polyglot: 68 (std-cell utilization about 54 % with four Wire Engines, 64 % with six); global routing has no overflow.",
   "PL_TARGET_DENSITY_PCT": 68,
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
@@ -51,8 +51,20 @@
   "RUN_POST_GRT_DESIGN_REPAIR": true,
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
-  "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
+  "//": "Polyglot: 0.05 after placement (polyglot.sdc already keeps 0.1 ns hold uncertainty).",
+  "PL_RESIZER_HOLD_SLACK_MARGIN": 0.05,
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,
+
+  "//": "Polyglot: LibreLane's base.sdc with the 0.25 ns clock uncertainty kept for setup only;",
+  "//": "hold gets 0.1 ns on top of propagated clocks and the 5 % derate. With base.sdc 4101 of",
+  "//": "4402 endpoints 'failed' hold after CTS and repair added 4527 delay buffers (~60k um^2).",
+  "PNR_SDC_FILE": "dir::polyglot.sdc",
+  "SIGNOFF_SDC_FILE": "dir::polyglot.sdc",
+
+  "//": "Polyglot: area-oriented synthesis. The TT default (DELAY 4) maps to 565k um^2, AREA 0 to",
+  "//": "467k (Yosys, four engines); the slow corner still has over 3 ns of setup slack at 50 MHz.",
+  "SYNTH_STRATEGY": "AREA 0",
+  "MAX_FANOUT_CONSTRAINT": 16,
 
   "//": "Polyglot: repair setup again after global routing, and keep repairing until 3.3 ns of",
   "//": "slack remain (the slack a 60 MHz clock would need), instead of stopping at zero.",
@@ -70,7 +82,8 @@
 
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
-  "//": "On-chip SRAM: one IHP 1024x32 macro (4 KB), bottom left, flipped (FS) so its pins face the logic.",
+  "//": "On-chip SRAM: one IHP 1024x32 macro (4 KB), bottom right, flipped (FS) so its pins face the logic.",
+  "//": "The TT pins are all on the top edge at x = 29..191 um, so the macro sits as far from them as it can.",
   "MACROS": {
     "RM_IHPSG13_1P_1024x32_c2_bm_bist": {
       "gds": ["pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_1024x32_c2_bm_bist.gds"],
@@ -84,7 +97,7 @@
         "nom_slow_1p08V_125C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_1024x32_c2_bm_bist_slow_1p08V_125C.lib"]
       },
       "instances": {
-        "u_sram.u_macro": {"location": [3.36, 3.78], "orientation": "FS"}
+        "u_sram.u_macro": {"location": [1304.16, 3.78], "orientation": "FS"}
       }
     }
   },
@@ -94,16 +107,16 @@
   ],
   "//": "pdngen stays out of the SRAM's x-range; Polyglot.SramStripes puts full-height trunks there on",
   "//": "the macro's own supply columns (TT needs every stripe full height) and feeds all columns.",
-  "PDN_OBSTRUCTIONS": ["Metal4 0 0 425.0 710.64"],
-  "SRAM_STRIPES_REGION": [0, 425.0],
+  "PDN_OBSTRUCTIONS": ["Metal4 1299.16 0 1724.16 710.64"],
+  "SRAM_STRIPES_REGION": [1299.16, 1724.16],
   "//": "A 6 um cell-free ring around the SRAM leaves routing tracks free for nets turning its corner.",
   "FP_MACRO_HORIZONTAL_HALO": 6.0,
   "FP_MACRO_VERTICAL_HALO": 6.0,
   "//": "Keep signal routing off the macro (CMOS5L routes on Metal2-Metal4 only).",
   "ROUTING_OBSTRUCTIONS": [
-    "Metal2 3.36 3.78 420.0 340.24",
-    "Metal3 3.36 3.78 420.0 340.24",
-    "Metal4 3.36 3.78 420.0 340.24"
+    "Metal2 1304.16 3.78 1720.8 340.24",
+    "Metal3 1304.16 3.78 1720.8 340.24",
+    "Metal4 1304.16 3.78 1720.8 340.24"
   ],
   "//": "Magic DRC reports illegal overlaps between the tile stripes and the macro's LEF abstract",
   "//": "(Metal4 bar between VDD! and VDDARRAY!); sign off with KLayout DRC on the real GDS instead.",
