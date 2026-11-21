@@ -28,6 +28,13 @@ MUT = {  # name: (program, file, old, new, test module, testcase or None, why)
     "usbfs":   ("usb_host_fs", "examples/usb_host/main.c", "last_keepalive += PG_US_TO_TICKS(1000);", "last_keepalive += PG_US_TO_TICKS(1001);", "test_usb_host", "test_usb_fs_host", "SOF every 1.001 ms"),
     "sdi12":   ("sdi12", "examples/sdi12/main.c", "wire_putn(SD, 25, 0x7FFFu);", "wire_putn(SD, 25, 0x1FFFu);", "test_sdi12", None, "10.8 ms BREAK"),
     "kline":   ("kline", "examples/kline/main.c", "t += 6u * MS;", "t += 4u * MS;", "test_kline", None, "P4 = 4 ms"),
+    "canfd":   ("canfd", "../include/protocol.h", "uint32_t c = s.dsc & 7u, g = c ^ (c >> 1);", "uint32_t c = s.dsc, g = (c ^ (c >> 1)) & 7u;", "test_canfd", "test_canfd_send_500k_2m", "stuff count Gray-coded before mod 8"),
+    "canfd2":  ("canfd", "../include/protocol.h", "s.c17 = 1u << 16;", "s.c17 = 0;", "test_canfd", "test_canfd_send_500k_2m", "non-ISO CRC-17 initial value"),
+    "i3c":     ("i3c", "../include/protocol.h", "(pg_parity(x) ^ 1u)", "pg_parity(x)", "test_i3c", None, "even T bit"),
+    "i3cpp":   ("i3c", "../include/protocol.h", "b->w->TXATTR = WIRE_A_FAST | WIRE_A_PP;", "b->w->TXATTR = WIRE_A_FAST;", "test_i3c", None, "data words open drain"),
+    "spdif":   ("spdif", "../include/protocol.h", "x |= pg_parity(x) << 27;", "x |= (pg_parity(x) ^ 1u) << 27;", "test_spdif", "test_spdif_send_48k", "odd parity"),
+    "usbpd":   ("usb_pd_sink", "../include/protocol.h", "pd__nibbles(&t, ~crc, 8);", "pd__nibbles(&t, crc, 8);", "test_usb_pd", None, "CRC-32 not inverted"),
+    "ltc":     ("ltc", "../include/protocol.h", "lo |= 1u << 27;", "lo |= 0u;", "test_ltc", None, "no polarity correction bit"),
 }
 names = sys.argv[1:] or list(MUT)
 env = dict(os.environ)

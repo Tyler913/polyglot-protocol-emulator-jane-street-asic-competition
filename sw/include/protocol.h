@@ -228,7 +228,10 @@ typedef struct {
     volatile uint32_t CRCPOLY;
     volatile uint32_t RXMATCH;  /* auto-reply only for packets whose word k matches */
     volatile uint32_t ACKBIT;   /* auto-reply at RX bit N if the RX CRC checks (full engines) */
-    uint32_t _pad[16];
+    volatile uint32_t DIV2;     /* second bit period for FAST words (full engines) */
+    volatile uint32_t PHASE;    /* sample points at DIV and DIV2 (0 = mid-bit) */
+    volatile uint32_t FDCTL;    /* CAN FD RX unit (W0) */
+    uint32_t _pad[13];
     volatile uint32_t TXN[32];  /* TXN[n-1] = x pushes an n-bit word */
 } pg_wire_t;
 
@@ -281,6 +284,10 @@ typedef struct {
 #define WIRE_TAIL(n)     (((uint32_t)(n) & 3u) << 17)  /* drive n idle bits after the last word */
 #define WIRE_EOF_RUN(n)  (((uint32_t)(n) & 7u) << 19)  /* RX_PACKET also ends after n idle bits (CAN) */
 #define WIRE_MSTART      (1u << 22)                /* Manchester RX: the first edge starts a bit (not mid-bit) */
+#define WIRE_BIPHASE     (3u << 9)                 /* line code: biphase mark (S/PDIF, AES3, USB PD, LTC);
+                                                      RX (async, engine 1) decodes by edge timing */
+#define WIRE_BIPHASE_DM  (1u << 23)                /* with WIRE_BIPHASE: differential Manchester */
+#define WIRE_RSW_SP      (1u << 24)                /* FAST rate changes at the sample point of the last bit (CAN FD) */
 
 /* TXATTR bits (apply to the words pushed after the write) */
 #define WIRE_A_NOSTUFF   (1u << 0)
@@ -289,13 +296,23 @@ typedef struct {
 #define WIRE_A_CRC_OUT   (1u << 3)                 /* append the CRC after this word */
 #define WIRE_A_SE0       (1u << 4)                 /* both lines low for this word */
 #define WIRE_A_AFTER_RX  (1u << 5)                 /* start TURN cycles after the next received packet */
+#define WIRE_A_FAST      (1u << 6)                 /* bit period DIV2 */
+#define WIRE_A_PP        (1u << 7)                 /* open-drain mode: drive this word push-pull (I3C) */
+#define WIRE_A_RAW       (1u << 8)                 /* no line code: NRZ levels */
+
+/* DIV2: second bit period (DIV2 >> 8 cycles + fraction) from a PG_BIT_FIX8 value */
+#define WIRE_DIV2_FIX8(x) ((((uint32_t)(x) >> 8) & 0xFFFFu) | (((uint32_t)(x) & 0xFFu) << 16))
+/* PHASE: sample point as cycles before the end of the bit, at DIV and at DIV2 */
+#define WIRE_PHASE(n, f)  (((uint32_t)(n) & 0xFFFFu) | ((uint32_t)(f) << 16))
 
 /* RXMATCH: only packets whose word k satisfies (word & mask) == value trigger AFTER_RX words */
 #define WIRE_MATCH(k, value, mask) ((((uint32_t)(k) & 15u) << 16) | (((uint32_t)(mask) & 0xFFu) << 8) | ((uint32_t)(value) & 0xFFu))
 
 /* ACKBIT: AFTER_RX words start TURN cycles after RX decodes bit n of the packet
- * (1 = its first bit, stuff bits not counted), if the RX CRC over bits 1..n-1 is zero */
-#define WIRE_ACK_AT(n)   (((uint32_t)(n) & 0xFFu) | (1u << 8))
+ * (1 = its first bit, stuff bits not counted), if the RX CRC over bits 1..n-1 is zero.
+ * WIRE_ACK_FD (W0 with FDCTL on): at the CRC delimiter of a CAN FD frame that checks. */
+#define WIRE_ACK_AT(n)   (((uint32_t)(n) & 0x3FFu) | (1u << 16))
+#define WIRE_ACK_FD      (1u << 16)
 
 /* CRC unit: width 1..32, polynomial without the top bit; TX appends it MSB first */
 static inline void wire_crc(pg_wire_t *w, uint32_t poly, int width, uint32_t init, int xorout, int rx_skip)
@@ -333,7 +350,7 @@ static inline uint32_t pg_bit_fix8(uint32_t hz)
  * carries the number of bits in the last (partial) word: WIRE_END_BITS(w). */
 #define WIRE_EV_START  0x80000001u
 #define WIRE_EV_END    0x80000002u
-#define WIRE_IS_END(w)   (((w) & 0xFFFFE0FFu) == WIRE_EV_END)
+#define WIRE_IS_END(w)   (((w) & 0xFFE0E0FFu) == WIRE_EV_END)   /* bits 20..16: CAN FD unit status */
 #define WIRE_END_BITS(w) (((w) >> 8) & 31u)
 
 /* STATUS fields */
@@ -1202,6 +1219,587 @@ static inline int can_recv_b(pg_wire_t *w, can_frame_t *f, int ack)
     if (ack && WIRE_TX_LEVEL(w->STATUS)) wire_tx_discard(w);   /* CRC bad: the ACK stayed queued */
     if (WIRE_END_BITS(x)) nb -= 20u - WIRE_END_BITS(x);       /* partial last word */
     return can_parse_bits(a, nb, f);
+}
+
+/* ---- CAN FD (ISO 11898-1:2015) on W0 ------------------------------------------
+ * Two bit rates in one frame: TX words with WIRE_A_FAST use DIV2, and with
+ * WIRE_RSW_SP the rate changes at the sample point of BRS and of the CRC
+ * delimiter. The engine stuffs SOF..data and reads back the arbitration field;
+ * C simulates the same stuffing to get the stuff count and the CRC-17/21 (they
+ * cover the dynamic stuff bits), and sends the CRC field with its fixed stuff
+ * bits as NOSTUFF words. RX: W0's CAN FD unit (FDCTL) follows FDF, BRS and the
+ * DLC of every frame, switches the RX bit rate, removes the fixed stuff bits
+ * and checks CRC-17/21 and the stuff count; it also follows classic frames
+ * (CRC-15) and, like a CAN controller, ACKs every good frame from another node
+ * by itself (FDCTL_ACK_EN), so C has no deadline. The frame status comes with
+ * the RX end marker (bits 20..16). Classic CAN frames still work on the same
+ * bus (can_send; canfd_recv parses both). Sample points: 80 % nominal, 75 %
+ * data. RX words are 20 bits long.
+ */
+#define FDCTL_EN      1u
+#define FDCTL_ACK_EN  2u          /* the unit ACKs good frames from other nodes itself */
+#define FDCTL_FDF     (1u << 8)
+#define FDCTL_BRS     (1u << 9)
+#define FDCTL_DLM     (1u << 10)
+#define FDCTL_CRC_OK  (1u << 11)
+#define FDCTL_SC_OK   (1u << 12)
+
+static const uint8_t canfd_len[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64};
+
+/* DLC for a payload length (rounded up to the next valid length) */
+static inline uint32_t canfd_dlc(uint32_t n)
+{
+    uint32_t d = 0;
+    while (d < 15u && canfd_len[d] < n) d++;
+    return d;
+}
+
+static inline void canfd_init(pg_wire_t *w, int txd_pin, int rxd_pin, uint32_t nominal, uint32_t data)
+{
+    uint32_t fn = PG_BIT_FIX8(nominal), fd = PG_BIT_FIX8(data);
+    can_init_fix8(w, txd_pin, rxd_pin, fn);
+    w->DIV2  = WIRE_DIV2_FIX8(fd);
+    w->PHASE = WIRE_PHASE((fn >> 8) / 5u, (fd >> 8) / 4u);
+    w->CTRL2 = w->CTRL2 | WIRE_RSW_SP;
+    w->TURN  = (fn >> 8) / 5u - 4u;                   /* delimiter sample -> ACK slot start */
+    w->FDCTL = FDCTL_EN | FDCTL_ACK_EN;
+    w->CTRL  = (w->CTRL & ~WIRE_LEN(32)) | WIRE_LEN(20);
+}
+
+/* C copy of the engine's stuffing over SOF..data, with CRC-17 and CRC-21 */
+typedef struct { uint32_t c17, c21, run, last, dsc, pend; } canfd_tx_t;
+
+static inline void canfd_crc_bit(canfd_tx_t *s, uint32_t b)
+{
+    uint32_t f17 = (b ^ (s->c17 >> 16)) & 1u, f21 = (b ^ (s->c21 >> 20)) & 1u;
+    s->c17 = ((s->c17 << 1) & 0x1FFFFu) ^ (f17 ? 0x1685Bu : 0u);
+    s->c21 = ((s->c21 << 1) & 0x1FFFFFu) ^ (f21 ? 0x102899u : 0u);
+}
+
+/* Pass 0: account for n bits (MSB first); pass 1: push them as one word.
+ * The whole frame is computed before the first word goes out, since the
+ * per-bit simulation is slower than a fast data phase. */
+static inline void canfd_put(pg_wire_t *w, canfd_tx_t *s, int n, uint32_t x, uint32_t attr, int pass)
+{
+    if (pass) {
+        w->TXATTR = attr;
+        wire_putn(w, n, x);
+        return;
+    }
+    for (int i = n - 1; i >= 0; i--) {
+        uint32_t b = (x >> i) & 1u;
+        if (s->pend) {                                /* the engine's dynamic stuff bit */
+            canfd_crc_bit(s, s->last ^ 1u);
+            s->dsc++;
+            s->last ^= 1u;
+            s->run = 1;
+            s->pend = 0;
+        }
+        canfd_crc_bit(s, b);
+        s->run = (b == s->last) ? s->run + 1u : 1u;
+        s->last = b;
+        if (s->run == 5u) s->pend = 1;                /* due before the next bit */
+    }
+}
+
+/* Queue a frame: n data bytes (0..64, a valid CAN FD length), brs = data phase
+ * at the second bit rate. Identifiers with CAN_EFF set are 29-bit. */
+static inline void canfd_send(pg_wire_t *w, uint32_t id, const uint8_t *d, uint32_t n, int brs)
+{
+    canfd_tx_t s;
+    s.c17 = 1u << 16;                                 /* ISO: 1 followed by zeros */
+    s.c21 = 1u << 20;
+    s.run = s.dsc = s.pend = 0;
+    s.last = 2;
+    uint32_t fast = brs ? WIRE_A_FAST : 0u, b = brs ? 1u : 0u, tw[2], tn[2] = {0, 0};
+    for (int pass = 0; pass < 2; pass++) {
+        if (id & CAN_EFF) {                           /* SOF, base ID, SRR, IDE, ID extension */
+            canfd_put(w, &s, 32, (((id >> 18) & 0x7FFu) << 20) | (3u << 18) | (id & 0x3FFFFu), 0, pass);
+            canfd_put(w, &s, 4, 4u | b, 0, pass);    /* RRS, FDF, res, BRS */
+        } else {                                      /* SOF, ID, RRS, IDE, FDF, res, BRS */
+            canfd_put(w, &s, 17, ((id & 0x7FFu) << 5) | 4u | b, 0, pass);
+        }
+        canfd_put(w, &s, 5, canfd_dlc(n), fast, pass);   /* ESI, DLC */
+        for (uint32_t i = 0; i < n; ) {
+            uint32_t k = n - i < 4u ? n - i : 4u, x = 0;
+            for (uint32_t j = 0; j < k; j++) x = (x << 8) | d[i + j];
+            i += k;
+            canfd_put(w, &s, (int)(8 * k), x, fast, pass);
+        }
+        if (pass) break;
+        /* CRC field: stuff count (Gray code + even parity), CRC; a fixed stuff bit
+         * before it and after every 4 bits. If the engine stuffs after the last
+         * data bit, that stuff bit is the first fixed one (not counted, not in
+         * the CRC). At most 33 bits with the delimiter: two words. */
+        uint32_t c = s.dsc & 7u, g = c ^ (c >> 1);
+        uint32_t sc = (g << 1) | ((g ^ (g >> 1) ^ (g >> 2)) & 1u);
+        for (int i = 3; i >= 0; i--) canfd_crc_bit(&s, (sc >> i) & 1u);
+        uint32_t wd = n > 16u ? 21u : 17u, crc = wd == 21u ? s.c21 : s.c17;
+        uint32_t prev = s.pend ? s.last ^ 1u : s.last, acc = 0, na = 0;
+        for (uint32_t i = 0; i < 4u + wd; i++) {
+            uint32_t bit = i < 4u ? (sc >> (3u - i)) & 1u : (crc >> (wd + 3u - i)) & 1u;
+            if ((i & 3u) == 0 && (i || !s.pend)) {    /* fixed stuff bit */
+                prev ^= 1u;
+                acc = (acc << 1) | prev;
+                na++;
+            }
+            acc = (acc << 1) | bit;
+            prev = bit;
+            if (++na >= 31u) {                        /* keep room for one more bit */
+                tw[0] = acc;
+                tn[0] = na;
+                acc = 0;
+                na = 0;
+            }
+        }
+        tw[1] = (acc << 1) | 1u;                      /* ... CRC delimiter (rate back at its sample point) */
+        tn[1] = na + 1u;
+    }
+    uint32_t attr = fast | WIRE_A_NOSTUFF | WIRE_A_NOCRC;
+    for (int k = 0; k < 2; k++) {
+        if (!tn[k]) continue;
+        w->TXATTR = attr;
+        wire_putn(w, (int)tn[k], tw[k]);
+    }
+    w->TXATTR = WIRE_A_NOSTUFF | WIRE_A_NOCRC;
+    wire_putn(w, 12, 0xFFFu);                         /* ACK slot, ACK delim, EOF, intermission */
+    w->TXATTR = 0;
+}
+
+typedef struct {
+    uint32_t id;
+    uint32_t status;     /* FDCTL at the end of the frame (FD frames) */
+    uint8_t  len, fd, brs, crc_ok, acked;
+    uint8_t  data[64];
+} canfd_frame_t;
+
+/* n (1..32) bits from position pos of an MSB-first packed bit buffer */
+static inline uint32_t canfd_field(const uint32_t *a, uint32_t pos, uint32_t n)
+{
+    uint32_t k = pos >> 5, sh = pos & 31u, v = a[k] << sh;
+    if (sh + n > 32u) v |= a[k + 1u] >> (32u - sh);
+    return v >> (32u - n);
+}
+
+/* Receive one frame, classic or FD (blocks; the unit has already ACKed it if
+ * good). Returns 0, or -1 if the frame was too short. The 20-bit RX words are
+ * packed into 32-bit words as they arrive (no division: RV32EC). */
+static inline int canfd_recv(pg_wire_t *w, canfd_frame_t *f)
+{
+    uint32_t a[22], nb = 0, nw = 0, x, st;
+    for (uint32_t i = 0; i < 22u; i++) a[i] = 0;
+    for (;;) {                                        /* destuffed bits, MSB first, 20 per word */
+        x = wire_get(w);
+        if (WIRE_IS_END(x)) break;
+        nw++;
+        uint32_t k = nb >> 5, s = nb & 31u;           /* append 20 bits MSB first */
+        x &= 0xFFFFFu;
+        if (k < 21u) {
+            if (s <= 12u) a[k] |= x << (12u - s);
+            else {
+                a[k] |= x >> (s - 12u);
+                a[k + 1u] |= x << (44u - s);
+            }
+            nb += 20u;
+        }
+    }
+    st = (x >> 8) & 0x1F00u;                          /* unit status (FDCTL[12:8] layout) */
+    if (WIRE_END_BITS(x) && nb >= 20u) nb -= 20u - WIRE_END_BITS(x);
+    if (nb < 20u) return -1;
+    uint32_t ide = canfd_field(a, 13, 1), fdf = canfd_field(a, ide ? 33u : 14u, 1);
+    uint32_t hdr = fdf ? (ide ? 41u : 22u) : (ide ? 39u : 19u);
+    if (nb < hdr) return -1;
+    uint32_t dlc = canfd_field(a, hdr - 4u, 4), len = fdf ? canfd_len[dlc] : (dlc > 8u ? 8u : dlc);
+    uint32_t end = hdr + 8u * len + (fdf ? (len > 16u ? 25u : 21u) : 15u);   /* CRC delimiter */
+    if (nb < end + 2u) return -1;
+    f->id = canfd_field(a, 1, 11);
+    if (ide) f->id = (f->id << 18) | canfd_field(a, 14, 18) | CAN_EFF;
+    f->status = st;
+    f->len = (uint8_t)len;
+    f->fd  = (uint8_t)fdf;
+    f->brs = (uint8_t)(fdf && canfd_field(a, hdr - 6u, 1));
+    for (uint32_t i = 0; i < len; i += 4u) {          /* four bytes per field read */
+        uint32_t v = canfd_field(a, hdr + 8u * i, 32);
+        for (uint32_t j = 0; j < 4u && i + j < len; j++) f->data[i + j] = (uint8_t)(v >> (24u - 8u * j));
+    }
+    f->crc_ok = (st & (FDCTL_DLM | FDCTL_CRC_OK)) == (FDCTL_DLM | FDCTL_CRC_OK) &&
+                (!fdf || (st & FDCTL_SC_OK));
+    f->acked = (uint8_t)!canfd_field(a, end + 1u, 1);    /* ACK slot */
+    return 0;
+}
+
+/* ---- S/PDIF and AES3 (IEC 60958 / AES3 line format) ------------------------
+ * Biphase mark (WIRE_BIPHASE) on a full engine: one slot = 1/(64 fs). A
+ * subframe is a preamble (sent as 8 RAW half slots at DIV2 = half a slot) and
+ * 28 coded slots: 24-bit sample, V, U, C, even parity P. The parity keeps the
+ * line low at every subframe end, so the preambles have one polarity.
+ * RX (W1 only): the engine decodes by edge timing and starts a 30-bit word at
+ * each preamble, type in bits [1:0] (SPDIF_B/M/W), slots 4..31 in bits [29:2].
+ */
+#define SPDIF_B 1u    /* channel A, first frame of a 192-frame block */
+#define SPDIF_M 2u    /* channel A */
+#define SPDIF_W 3u    /* channel B */
+
+static inline uint32_t pg_parity(uint32_t x)
+{
+    x ^= x >> 16;
+    x ^= x >> 8;
+    x ^= x >> 4;
+    x ^= x >> 2;
+    x ^= x >> 1;
+    return x & 1u;
+}
+
+static inline void spdif_tx_init(pg_wire_t *w, int pin, uint32_t fs)
+{
+    uint32_t fix = PG_BIT_FIX8(fs * 64u);
+    w->CTRL   = 0;
+    w->DIV    = fix >> 8;
+    w->CTRL2  = WIRE_FRAC(fix) | WIRE_BIPHASE;
+    w->DIV2   = WIRE_DIV2_FIX8(fix >> 1);
+    w->PINS   = WIRE_PINS(pin, 0, 0);
+    w->TXATTR = 0;
+    w->CTRL   = WIRE_EN | WIRE_TX | WIRE_LEN(28);
+}
+
+/* Queue one subframe: pre = SPDIF_B/M/W, 24-bit sample, vuc = V | U << 1 | C << 2 */
+static inline void spdif_put(pg_wire_t *w, uint32_t pre, uint32_t sample, uint32_t vuc)
+{
+    static const uint8_t pat[4] = {0, 0x17, 0x47, 0x27};   /* B, M, W half slots, first in bit 0 */
+    uint32_t x = (sample & 0xFFFFFFu) | ((vuc & 7u) << 24);
+    x |= pg_parity(x) << 27;
+    w->TXATTR = WIRE_A_RAW | WIRE_A_FAST;
+    wire_putn(w, 8, pat[pre & 3u]);
+    w->TXATTR = 0;
+    wire_putn(w, 28, x);
+}
+
+static inline void spdif_rx_init(pg_wire_t *w, int pin, uint32_t fs)
+{
+    uint32_t fix = PG_BIT_FIX8(fs * 64u);
+    w->CTRL   = 0;
+    w->DIV    = fix >> 8;
+    w->CTRL2  = WIRE_BIPHASE | WIRE_RX_PACKET;
+    w->PINS   = WIRE_PINS(0, pin, 0);
+    w->CRCCFG = 1u << 24;                             /* SYNC_EN: nothing before the first preamble */
+    w->CTRL   = WIRE_EN | WIRE_RX | WIRE_RX_ASYNC | WIRE_LEN(30);
+}
+
+/* Next subframe word (blocks): type in [1:0], slots 4..31 in [29:2] */
+static inline uint32_t spdif_get(pg_wire_t *w) { return wire_get(w); }
+
+/* ---- MIPI I3C SDR controller ------------------------------------------------
+ * SDA is the engine's TX/RX pin in open-drain mode, SCL its push-pull clock.
+ * The address header and its ACK run open drain at DIV (I2C-like timing);
+ * data words run at DIV2 (up to 12.5 MHz) and controller writes are driven
+ * push-pull (WIRE_A_PP) as the spec requires: 8 data bits and the T bit
+ * (odd parity). In reads the target drives data and T (1 = more data).
+ * START, repeated START and STOP are made with GPIO, as for I2C. Both pins must
+ * be uio pins with pull-ups. Uses a full engine (W0 or W1).
+ */
+#define WIRE_I3C_CTRL_BITS (WIRE_EN | WIRE_RX | WIRE_MSB_FIRST | WIRE_IDLE_HIGH | WIRE_OE_OPEN_DRAIN | \
+                            WIRE_TX_LATE | WIRE_RX_DELAY(3) | WIRE_LEN(9))
+
+typedef i2c_t i3c_t;
+
+static inline void i3c__engine(const i3c_t *b, int on)
+{
+    b->w->CTRL = WIRE_I3C_CTRL_BITS | (on ? WIRE_TX | WIRE_CLK_OUT : 0u);
+}
+
+/* od_hz: open-drain bit rate (header, ACK); pp_hz: push-pull data rate */
+static inline void i3c_init(i3c_t *b, pg_wire_t *w, int sda_pin, int scl_pin, uint32_t od_hz, uint32_t pp_hz)
+{
+    b->w = w; b->sda = sda_pin; b->scl = scl_pin;
+    b->quarter = PG_BIT_TICKS(od_hz) / 4u;
+    i2c__pins(0, 0, b);
+    w->CTRL   = 0;
+    w->DIV    = PG_BIT_TICKS(od_hz);
+    w->DIV2   = PG_BIT_TICKS(pp_hz);
+    w->PINS   = WIRE_PINS(sda_pin, sda_pin, scl_pin);
+    w->TXATTR = 0;
+    i3c__engine(b, 0);
+}
+
+/* START, or repeated START after a transfer */
+static inline void i3c_start(const i3c_t *b)
+{
+    if (b->w->CTRL & WIRE_TX) {
+        wire_flush(b->w);
+        i2c__pins(0, 1, b);             /* GPIO: SCL low, SDA released */
+        i3c__engine(b, 0);
+        delay_ticks(b->quarter);
+        i2c__pins(0, 0, b);             /* SCL up */
+        delay_ticks(2u * b->quarter);
+    }
+    i2c__pins(1, 0, b);                 /* SDA falls while SCL is high */
+    delay_ticks(2u * b->quarter);
+    i2c__pins(1, 1, b);                 /* SCL low */
+    delay_ticks(b->quarter);
+    i3c__engine(b, 1);
+}
+
+static inline void i3c_stop(const i3c_t *b)
+{
+    wire_flush(b->w);
+    i2c__pins(1, 1, b);                 /* SDA and SCL low */
+    i3c__engine(b, 0);
+    delay_ticks(b->quarter);
+    i2c__pins(1, 0, b);                 /* SCL up */
+    delay_ticks(2u * b->quarter);
+    i2c__pins(0, 0, b);                 /* SDA rises while SCL is high */
+    delay_ticks(2u * b->quarter);
+}
+
+/* Address header (open drain); returns 1 if a target acknowledged */
+static inline int i3c_header(const i3c_t *b, uint32_t addr, int rnw)
+{
+    wire_putn(b->w, 8, (addr << 1) | (rnw ? 1u : 0u));
+    wire_putn(b->w, 1, 1u);             /* ACK slot: released */
+    (void)wire_get(b->w);
+    return (wire_get(b->w) & 1u) == 0u;
+}
+
+/* Data byte from the controller: push-pull, T = odd parity */
+static inline void i3c_write(const i3c_t *b, uint8_t x)
+{
+    b->w->TXATTR = WIRE_A_FAST | WIRE_A_PP;
+    wire_putn(b->w, 9, ((uint32_t)x << 1) | (pg_parity(x) ^ 1u));
+    b->w->TXATTR = 0;
+    (void)wire_get(b->w);
+}
+
+/* Data byte from the target; *more = its T bit (0 on the last byte) */
+static inline uint8_t i3c_read(const i3c_t *b, int *more)
+{
+    b->w->TXATTR = WIRE_A_FAST;
+    wire_putn(b->w, 9, 0x1FFu);         /* released: the target drives */
+    b->w->TXATTR = 0;
+    uint32_t x = wire_get(b->w);
+    *more = (int)(x & 1u);
+    return (uint8_t)(x >> 1);
+}
+
+/* Broadcast or direct CCC write: START 7E/W, code, data; returns the 7E ACK */
+static inline int i3c_ccc(const i3c_t *b, uint8_t code, const uint8_t *d, uint32_t n, int stop)
+{
+    i3c_start(b);
+    int ok = i3c_header(b, 0x7Eu, 0);
+    if (ok) {
+        i3c_write(b, code);
+        for (uint32_t i = 0; i < n; i++) i3c_write(b, d[i]);
+    }
+    if (stop || !ok) i3c_stop(b);
+    return ok;
+}
+
+/* Read up to max bytes from addr (after i3c_start); returns the number read
+ * (the target ends with T = 0), or -1 without ACK. Ends with STOP. */
+static inline int i3c_read_msg(const i3c_t *b, uint32_t addr, uint8_t *d, uint32_t max)
+{
+    int more = 1, n = 0;
+    if (!i3c_header(b, addr, 1)) {
+        i3c_stop(b);
+        return -1;
+    }
+    while (more && (uint32_t)n < max) d[n++] = i3c_read(b, &more);
+    i3c_stop(b);
+    return n;
+}
+
+/* ---- USB Power Delivery (BMC, 4b5b) on W1 -----------------------------------
+ * The engine does the biphase mark coding at 300 kbit/s both ways (TX on a
+ * full engine, RX on W1 by edge timing); C does the 4b5b symbols, the CRC-32
+ * and the message layer. The CC wire carries both directions: TX drives it
+ * only while sending (WIRE_OE_FRAME, through the board's BMC driver), RX reads
+ * it through a comparator, so RX also sees our own packets. RX hunts for the
+ * end of the preamble and the first Sync-1 (SYNC pattern) and delivers 5-bit
+ * symbols. Bits and symbols go LSB first, nibbles low first.
+ */
+#define PD_SYNC1 0x18u
+#define PD_SYNC2 0x11u
+#define PD_EOP   0x0Du
+#define PD_CTRL_GOODCRC 1u
+#define PD_CTRL_ACCEPT  3u
+#define PD_CTRL_PS_RDY  6u
+#define PD_DATA_SRC_CAP 1u
+#define PD_DATA_REQUEST 2u
+/* header: type, data role, spec revision 3.0, power role, message ID, objects */
+#define PD_HEADER(type, drole, prole, id, cnt) ((uint32_t)(type) | ((uint32_t)(drole) << 5) | (2u << 6) | \
+                                                ((uint32_t)(prole) << 8) | (((uint32_t)(id) & 7u) << 9) | \
+                                                (((uint32_t)(cnt) & 7u) << 12))
+#define PD_HDR_TYPE(h) ((h) & 0x1Fu)
+#define PD_HDR_ID(h)   (((h) >> 9) & 7u)
+#define PD_HDR_CNT(h)  (((h) >> 12) & 7u)
+
+static const uint8_t pd_enc4b5b[16] = {0x1E, 0x09, 0x14, 0x15, 0x0A, 0x0B, 0x0E, 0x0F,
+                                       0x12, 0x13, 0x16, 0x17, 0x1A, 0x1B, 0x1C, 0x1D};
+
+static inline uint32_t pd_crc32(uint32_t crc, uint32_t x, int nbytes)   /* CRC-32 (IEEE), LSB first */
+{
+    for (int i = 0; i < nbytes; i++, x >>= 8) {
+        crc ^= x & 0xFFu;
+        for (int k = 0; k < 8; k++) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+    return crc;
+}
+
+static inline void pd_init(pg_wire_t *w, int tx_pin, int rx_pin)
+{
+    uint32_t fix = PG_BIT_FIX8(300000);
+    w->CTRL   = 0;
+    w->DIV    = fix >> 8;
+    w->CTRL2  = WIRE_FRAC(fix) | WIRE_BIPHASE | WIRE_RX_PACKET | WIRE_TAIL(1);
+    w->PINS   = WIRE_PINS(tx_pin, rx_pin, 0);
+    w->CRCCFG = (0xC5u << 16) | (1u << 24);           /* ...1,0,1 of the preamble + Sync-1 */
+    w->TXATTR = 0;
+    w->CTRL   = WIRE_EN | WIRE_TX | WIRE_RX | WIRE_RX_ASYNC | WIRE_OE_FRAME | WIRE_EVENTS | WIRE_LEN(5);
+}
+
+typedef struct { pg_wire_t *w; uint32_t acc, n, lvl; } pd_tx_t;
+
+static inline void pd__sym(pd_tx_t *t, uint32_t s)    /* queue one 5-bit symbol */
+{
+    t->acc |= s << t->n;
+    t->n += 5u;
+    for (int i = 0; i < 5; i++, s >>= 1) t->lvl ^= (~s) & 1u;   /* a 0 bit flips the line once, a 1 twice */
+    if (t->n == 30u) {
+        wire_putn(t->w, 30, t->acc);
+        t->acc = t->n = 0;
+    }
+}
+
+static inline void pd__nibbles(pd_tx_t *t, uint32_t x, int n)
+{
+    while (n--) {
+        pd__sym(t, pd_enc4b5b[x & 15u]);
+        x >>= 4;
+    }
+}
+
+/* Send a message (header + cnt objects) and wait until it has left the wire
+ * and our own copy has gone through RX. */
+static inline void pd_send(pg_wire_t *w, uint32_t header, const uint32_t *obj, uint32_t cnt)
+{
+    pd_tx_t t = {w, 0, 0, 0};
+    uint32_t crc = pd_crc32(0xFFFFFFFFu, header, 2);
+    for (uint32_t i = 0; i < cnt; i++) crc = pd_crc32(crc, obj[i], 4);
+    wire_putn(w, 32, 0xAAAAAAAAu);                    /* preamble: 64 bits 0101..., first 0 */
+    wire_putn(w, 32, 0xAAAAAAAAu);
+    pd__sym(&t, PD_SYNC1); pd__sym(&t, PD_SYNC1); pd__sym(&t, PD_SYNC1); pd__sym(&t, PD_SYNC2);
+    pd__nibbles(&t, header, 4);
+    for (uint32_t i = 0; i < cnt; i++) pd__nibbles(&t, obj[i], 8);
+    pd__nibbles(&t, ~crc, 8);
+    pd__sym(&t, PD_EOP);
+    if (t.n) wire_putn(w, (int)t.n, t.acc);
+    if (!t.lvl) {                                     /* end with an edge: one high bit, then low */
+        w->TXATTR = WIRE_A_RAW;
+        wire_putn(w, 1, 1u);
+        w->TXATTR = 0;
+    }
+    wire_flush(w);
+    uint32_t t0 = now();
+    while (!time_reached(t0 + PG_US_TO_TICKS(20))) {  /* drop our own copy */
+        if (wire_rx_count(w) && WIRE_IS_END(wire_get(w))) break;
+    }
+}
+
+/* Receive a message within timeout_us. Returns the header, or -1 (timeout,
+ * bad symbol or CRC). obj[] gets up to 7 objects. */
+static inline int32_t pd_recv(pg_wire_t *w, uint32_t *obj, uint32_t timeout_us)
+{
+    static const uint8_t dec[32] = {16, 16, 16, 16, 16, 16, 16, 16, 16, 1, 4, 5, 16, 16, 6, 7,
+                                    16, 16, 8, 9, 2, 3, 10, 11, 16, 16, 12, 13, 14, 15, 0, 16};
+    uint32_t t0 = now(), k = 0, header = 0, crc = 0xFFFFFFFFu, n = 0, x, nib = 0, cnt = 7, got = 0;
+    for (;;) {
+        while (!wire_rx_count(w))
+            if (time_reached(t0 + PG_US_TO_TICKS(timeout_us))) return -1;
+        x = wire_get(w);
+        if (WIRE_IS_END(x)) {
+            if (got) return -1;                       /* ended early */
+            k = 0; continue;
+        }
+        if (k < 3u) {                                 /* the rest of the SOP: Sync-1, Sync-1, Sync-2 */
+            if (x != (k < 2u ? PD_SYNC1 : PD_SYNC2)) k = 99;
+            else k++;
+            continue;
+        }
+        if (k == 99) continue;                        /* not a SOP packet: skip to its end */
+        uint32_t d = dec[x & 31u];
+        if (d > 15u) return -1;
+        nib |= d << (4u * (n < 4u ? n : (n - 4u) & 7u));
+        n++;
+        if (n == 4u) {
+            header = nib;
+            cnt = PD_HDR_CNT(header);
+            crc = pd_crc32(crc, header, 2);
+            nib = 0;
+            got = 1;
+        } else if (n > 4u && ((n - 4u) & 7u) == 0) {
+            uint32_t i = (n - 4u) / 8u - 1u;
+            if (i < cnt) {
+                obj[i] = nib;
+                crc = pd_crc32(crc, nib, 4);
+            } else {
+                if (nib != ~crc) return -1;           /* CRC */
+                /* EOP and the end marker follow: drain them */
+                for (uint32_t m = 0; m < 4u; m++) {
+                    uint32_t t1 = now();
+                    while (!wire_rx_count(w) && !time_reached(t1 + PG_US_TO_TICKS(30))) { }
+                    if (!wire_rx_count(w) || WIRE_IS_END(wire_get(w))) break;
+                }
+                return (int32_t)header;
+            }
+            nib = 0;
+        }
+    }
+}
+
+/* ---- SMPTE linear timecode (LTC) -------------------------------------------
+ * 80-bit frames in biphase mark: TX on a full engine (three words), RX on W1
+ * (SYNC hunt on the end of the sync word, then 16-bit words: five per frame,
+ * the fifth is the sync word 0xBFFC). Fields are BCD, LSB first.
+ */
+typedef struct { uint8_t h, m, s, f; } ltc_time_t;
+
+/* tx = 1: the engine drives tx_pin (W0/W1); RX on W1 */
+static inline void ltc_init(pg_wire_t *w, int tx_pin, int rx_pin, uint32_t fps, int tx)
+{
+    uint32_t fix = PG_BIT_FIX8(fps * 80u);
+    w->CTRL   = 0;
+    w->DIV    = fix >> 8;
+    w->CTRL2  = WIRE_FRAC(fix) | WIRE_BIPHASE | WIRE_RX_PACKET;
+    w->PINS   = WIRE_PINS(tx_pin, rx_pin, 0);
+    w->CRCCFG = (0xBFu << 16) | (1u << 24);          /* last 8 bits of the sync word */
+    w->TXATTR = 0;
+    w->CTRL   = WIRE_EN | (tx ? WIRE_TX : WIRE_RX | WIRE_RX_ASYNC) | WIRE_LEN(16);
+}
+
+static inline uint32_t ltc__bcd(uint32_t v) { return (v / 10u) << 4 | (v % 10u); }
+
+static inline void ltc_send(pg_wire_t *w, ltc_time_t t)
+{
+    uint32_t f = ltc__bcd(t.f), s = ltc__bcd(t.s), m = ltc__bcd(t.m), h = ltc__bcd(t.h);
+    uint32_t lo = (f & 15u) | ((f >> 4) << 8) | ((s & 15u) << 16) | ((s >> 4) << 24);
+    uint32_t hi = (m & 15u) | ((m >> 4) << 8) | ((h & 15u) << 16) | ((h >> 4) << 24);
+    uint32_t sync = 0xBFFCu;                           /* bits 64..79, LSB first */
+    /* polarity correction (bit 27): an even number of zeros in the frame */
+    if ((80u - (uint32_t)__builtin_popcount(lo) - (uint32_t)__builtin_popcount(hi) -
+         (uint32_t)__builtin_popcount(sync)) & 1u) lo |= 1u << 27;
+    wire_putn(w, 32, lo);
+    wire_putn(w, 32, hi);
+    wire_putn(w, 16, sync);
+}
+
+/* Decode the five RX words of a frame: 0, or -1 if the fifth is not the sync word */
+static inline int ltc_decode(const uint32_t *x, ltc_time_t *t)
+{
+    if (x[4] != 0xBFFCu) return -1;
+    t->f = (uint8_t)((x[0] & 15u) + 10u * ((x[0] >> 8) & 3u));
+    t->s = (uint8_t)((x[1] & 15u) + 10u * ((x[1] >> 8) & 7u));
+    t->m = (uint8_t)((x[2] & 15u) + 10u * ((x[2] >> 8) & 7u));
+    t->h = (uint8_t)((x[3] & 15u) + 10u * ((x[3] >> 8) & 3u));
+    return 0;
 }
 
 /* ---- 100 Mbit/s Ethernet through an RMII PHY (experimental, pg_rmii) ---------

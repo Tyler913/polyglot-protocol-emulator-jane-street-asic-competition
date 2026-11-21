@@ -103,7 +103,7 @@ module pg_io #(
   generate
     for (g = 0; g < NUM_WIRES; g = g + 1) begin : g_wire
       assign w_sel[g] = valid && (page == g + 1);
-      pg_wire #(.FULL(g < NUM_FULL ? 1 : 0), .MRX(g == 1 ? 1 : 0)) u_wire (
+      pg_wire #(.FULL(g < NUM_FULL ? 1 : 0), .MRX(g == 1 ? 1 : 0), .FD(g == 0 ? 1 : 0)) u_wire (
           .clk    (clk),
           .rst    (rst),
           .valid  (w_sel[g]),

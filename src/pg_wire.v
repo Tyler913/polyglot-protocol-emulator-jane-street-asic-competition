@@ -79,13 +79,23 @@
  *                   this many consecutive idle-level bits (CAN end of frame;
  *                   a run of idle bits is then not a stuff error),
  *                   [22] MSTART (Manchester RX: the edge that starts a frame
- *                   is the start of the first bit, not its mid-bit transition)
+ *                   is the start of the first bit, not its mid-bit transition),
+ *                   [23] BIPHASE_DM (CODE 3: differential Manchester instead
+ *                   of biphase mark), [24] RSW_SP (FAST rate changes at the
+ *                   sample point, see below). CODE 3 = biphase: every bit
+ *                   starts with a transition and a 1 adds one at mid-bit
+ *                   (biphase mark: S/PDIF, AES3, USB PD, LTC); BIPHASE_DM:
+ *                   every bit has the mid-bit transition and a 0 adds one at
+ *                   the start. RX (async, engine 1) times the edges, see below.
  *   0x20 TXATTR RW  attributes of the words pushed from now on: [0] NOSTUFF,
  *                   [1] NOCRC (not part of the CRC), [2] CRC_INIT (reset the
  *                   TX CRC before this word), [3] CRC_OUT (send the TX CRC,
  *                   MSB first, after this word), [4] SE0 (both TX lines low
  *                   for this word's bits), [5] AFTER_RX (wait until TURN
- *                   cycles after the end of a received packet, then send)
+ *                   cycles after the end of a received packet, then send),
+ *                   [6] FAST (bit period DIV2), [7] PP (open-drain mode:
+ *                   drive this word push-pull; MIPI I3C), [8] RAW (no line
+ *                   code: the bits go out as NRZ levels)
  *   0x24 CRCCFG RW  [4:0] width-1 (1..32 bits), [5] XOROUT (send the CRC
  *                   complemented), [12:8] RX_SKIP (received bits after a
  *                   frame start that are not part of the RX CRC), [23:16]
@@ -101,14 +111,50 @@
  *   0x38 RXMATCH RW auto-reply filter: [7:0] value, [15:8] mask, [19:16]
  *                   word index k. A received packet triggers AFTER_RX words
  *                   only if (word k & mask) == (value & mask); mask 0 = any.
- *   0x3C ACKBIT RW  [7:0] bit N, [8] ARM. While armed, when RX decodes bit N
+ *   0x3C ACKBIT RW  [9:0] bit N, [16] ARM. While armed, when RX decodes bit N
  *                   of the packet (1 = its first bit; stuff bits are not
  *                   counted) and the RX CRC over bits 1..N-1 is zero (CRCINIT
  *                   from the frame start, RX_SKIP applies), AFTER_RX words
  *                   start TURN cycles later; a CRC mismatch sends nothing,
  *                   and the end of an armed packet does not release them
  *                   either. Disarms at bit N or at the packet end. This is
- *                   a reply inside a packet: the CAN receiver ACK.
+ *                   a reply inside a packet: the CAN receiver ACK. N = 0
+ *                   (engines with the CAN FD unit): at the CRC delimiter of a
+ *                   CAN FD frame, if its CRC-17/21 and stuff count check.
+ *
+ * Second page (full engines; lite engines read 0):
+ *   0x40 DIV2   RW  [15:0] second bit period in cycles (>= 2), [23:16] its
+ *                   DIV_FRAC. TX words with the FAST attribute use it.
+ *   0x44 PHASE  RW  [15:0] cycles from the sample point to the end of a bit
+ *                   at DIV, [31:16] the same at DIV2; 0 = half the bit. TX
+ *                   (read-back, mid-bit transition, SCK) and async RX sample
+ *                   there.
+ *   0x48 FDCTL  RW  engines built with the CAN FD unit (FD = 1, engine 0):
+ *                   [0] FD_EN, [1] ACK_EN; read: [8] FDF seen, [9] data bit
+ *                   rate on (BRS), [10] CRC delimiter reached, [11] CRC ok
+ *                   (CRC-17/21, or CRC-15 of a classic frame), [12] stuff
+ *                   count ok, [19:16] DLC, [22:20] dynamic stuff bits mod 8
+ *                   (status of the last or current packet). With FD_EN the
+ *                   RX end marker carries [12:8] in its bits [20:16].
+ *
+ * TX words with the FAST attribute use DIV2/PHASE[31:16]. The rate changes at
+ * the boundary between two words, or with CTRL2.RSW_SP at the sample point of
+ * the last bit of the earlier word (CAN FD switches at the sample point of BRS
+ * and of the CRC delimiter). FAST words are not read back for arbitration.
+ *
+ * CAN FD RX unit (FD_EN, async RX, ISO 11898-1:2015 frame format): it reads
+ * IDE (bit 14), FDF (bit 15, or 34 in an extended frame), BRS and the DLC of
+ * every received packet. In an FD frame RX switches to DIV2 at the sample point
+ * of a recessive BRS, removes the fixed stuff bits of the CRC field (one before
+ * the stuff count and one after every 4 bits; dynamic stuffing stops there),
+ * runs CRC-17 and CRC-21 (initial value 1 followed by zeros) over SOF..data
+ * with the dynamic stuff bits and the stuff count, checks the Gray-coded stuff
+ * count and its parity, and switches back to DIV at the sample point of the
+ * CRC delimiter. Bits after the delimiter are not destuffed. It also follows
+ * classic frames (FDF dominant: DLC at bit 19 or 39, CRC-15 from the CRC
+ * unit). ACK_EN: a good frame that is not our own (TX idle, or arbitration
+ * lost) gets the receiver ACK from the unit itself: the TX pin is driven
+ * dominant from TURN cycles after the delimiter's sample point for DIV cycles.
  *
  * AFTER_RX words wait for the end of a packet received after they were
  * pushed (pushing one cancels a pending trigger), then TURN cycles, or for
@@ -136,6 +182,17 @@
  * MRX = 1 (here engine 1) have the decoder and the SYNC hunt; in the others
  * MSTART, SYNC and SYNC_EN are not stored and read as 0.
  *
+ * Biphase RX (CODE 3, async RX, MRX engines): each interval between edges
+ * is short (< 3/4 bit), long (< 5/4 bit) or a violation (< 7/4 bit); no edge
+ * for 2 bits ends the frame. Biphase mark: long = 0, two shorts = 1
+ * (BIPHASE_DM: the inverse). A violation starts a 4-interval preamble
+ * (S/PDIF, AES3): the interval after it gives the type, 1 = B/Z (short),
+ * 3 = W/Y (long), 2 = M/X (violation), and the next word restarts with the
+ * type in its first two bits (LSB first), followed by the data bits. With
+ * SYNC_EN nothing is delivered before the first preamble or, with a non-zero
+ * SYNC pattern, before that pattern (USB PD: the end of the preamble and the
+ * first Sync-1).
+ *
  * External clock: the sample edge is rising when CPOL == CPHA, falling
  * otherwise; the other edge is the launch edge. The first word of a frame is
  * presented as soon as it is loaded; later words load on the launch edge
@@ -159,7 +216,8 @@
 module pg_wire #(
     parameter FIFO_AW = 2,
     parameter FULL    = 1,
-    parameter MRX     = 1      // Manchester RX decoder and SYNC hunt (full engines only)
+    parameter MRX     = 1,     // Manchester/biphase RX decoder and SYNC hunt (full engines only)
+    parameter FD      = 0      // CAN FD RX unit (full engines only)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -193,27 +251,33 @@ module pg_wire #(
                    R_RXCRC = 4'd11, R_TURN = 4'd12, R_CRCPOLY = 4'd13, R_RXMATCH = 4'd14,
                    R_ACKBIT = 4'd15;
 
-  localparam FW = 43;                     // TX FIFO entry: {attr[5:0], len-1[4:0], data[31:0]}
+  localparam FW = 46;                     // TX FIFO entry: {attr[8:0], len-1[4:0], data[31:0]}
   wire full = (FULL != 0);
+  wire fdu  = (FD != 0) && (FULL != 0);
 
   // ---------------------------------------------------------------------
   // Configuration
   // ---------------------------------------------------------------------
   reg [27:0] ctrl;
-  reg [22:0] ctrl2;
-  reg [5:0]  txattr;
+  reg [24:0] ctrl2;
+  reg [8:0]  txattr;
   reg [24:0] crccfg;
   // Config bits that this engine's build does not use read as 0 (no flops, no read mux inputs).
-  localparam [22:0] CTRL2_MASK  = (MRX != 0) ? 23'h7FFFFF : 23'h3FFFFF;
+  localparam [24:0] CTRL2_MASK  = (FULL == 0) ? 25'h03FFFFF :
+                                  (MRX != 0)  ? 25'h1FFFFFF : 25'h1BFFFFF;
   localparam [24:0] CRCCFG_MASK = (MRX != 0) ? 25'h1FFFFFF : 25'h0001FFF;
   reg [31:0] crcinit;
   reg [31:0] poly;
   reg [15:0] turn;
   reg [19:0] rxmatch;
-  reg [7:0]  ack_n;      // ACKBIT: decoded RX bit that releases AFTER_RX words
+  reg [9:0]  ack_n;      // ACKBIT: decoded RX bit that releases AFTER_RX words (0: CAN FD delimiter)
   reg        ack_arm;    // waiting for that bit
   reg        ack_pkt;    // this packet uses ACKBIT (its end does not release AFTER_RX words)
   reg [15:0] div;
+  reg [15:0] div2;       // second bit period (FAST words, CAN FD data phase)
+  reg [7:0]  frac2;
+  reg [15:0] ph2n, ph2f; // sample point: cycles before the end of the bit (0 = half)
+  reg        fd_en, fd_acken;
   reg [4:0]  txpin, rxpin, ckpin, gtpin;
 
   wire       en         = ctrl[0];
@@ -247,6 +311,9 @@ module pg_wire #(
   wire [1:0] tail_bits  = full ? ctrl2[18:17] : 2'd0;
   wire [2:0] eof_run    = full ? ctrl2[21:19] : 3'd0;
   wire       mstart     = ctrl2[22];
+  wire       bph        = full && (ctrl2[10:9] == 2'd3);      // biphase line code
+  wire       bph_dm     = ctrl2[23];
+  wire       rsw_sp     = full && ctrl2[24];
   wire [4:0]  crc_lm1   = crccfg[4:0];
   wire        crc_xor   = crccfg[5];
   wire [4:0]  rx_skip   = crccfg[12:8];
@@ -254,13 +321,16 @@ module pg_wire #(
   wire        sync_en   = full && (MRX != 0) && crccfg[24];
   wire [31:0] crc_mask  = 32'hFFFF_FFFF >> (5'd31 - crc_lm1);
 
-  wire [15:0] half = {1'b0, div[15:1]};                     // sample point (counting down from DIV-1)
-  wire [15:0] qpt  = div - 16'd1 - {2'b00, div[15:2]};      // quarter bit after the start
+  // Sample points (counting down from DIV-1): PHASE, or half the bit
+  wire [15:0] ph2n_e = (full && ph2n != 16'd0) ? ph2n : {1'b0, div[15:1]};
+  wire [15:0] ph2f_e = (ph2f != 16'd0) ? ph2f : {1'b0, div2[15:1]};
 
   wire sel     = valid && (addr[1:0] == 2'd0);
   wire tx_win  = sel && addr[7];                            // 0x80..0xFC: push with length
   wire reg_sel = sel && !addr[7] && !addr[6];
+  wire reg2_sel = sel && !addr[7] && addr[6];               // 0x40..0x7C: second page
   wire [3:0] ra = addr[5:2];
+  localparam [3:0] R2_DIV2 = 4'd0, R2_PHASE = 4'd1, R2_FDCTL = 4'd2;
 
   // Engine state is cleared while disabled
   wire srst = rst || !en;
@@ -297,7 +367,7 @@ module pg_wire #(
 
   pg_fifo #(.W(FW), .AW(FIFO_AW)) u_txf (
       .clk(clk), .rst(srst || f_stop || tx_discard), .push(txf_push),
-      .din({full ? txattr : 6'd0, tx_win ? addr[6:2] : len_m1, wdata}), .pop(txf_pop),
+      .din({full ? txattr : 9'd0, tx_win ? addr[6:2] : len_m1, wdata}), .pop(txf_pop),
       .dout(txf_dout), .level(txf_level), .full(txf_full), .empty(txf_empty)
   );
 
@@ -360,7 +430,8 @@ module pg_wire #(
   reg        tail;       // word done, line still shows its last bit
   reg [31:0] tx_sh;
   reg [4:0]  tx_cnt, tx_len;
-  reg [5:0]  tx_attr;    // attributes of the current word
+  reg [8:0]  tx_attr;    // attributes of the current word
+  reg        trate;      // TX bit period: 0 = DIV, 1 = DIV2
   reg        tx_msb;     // bit order of the current word (CRC words are MSB first)
   reg        in_crc;     // the current word is the appended CRC
   reg        stuffing;   // the current bit is a stuff bit
@@ -377,9 +448,12 @@ module pg_wire #(
   reg  [7:0] tacc;       // fractional bit period accumulator (TX timer)
   reg  [1:0] itail;      // TAIL_BITS still to drive at the idle level
 
-  // Next bit length: DIV, plus one cycle when the accumulator overflows
-  wire [8:0] tacc_sum = {1'b0, tacc} + {1'b0, frac};
-  wire [15:0] tbit_m1 = div - 16'd1 + {15'd0, tacc_sum[8]};
+  // Next bit length: DIV (DIV2 for FAST words), plus one cycle when the
+  // accumulator overflows. At a word load the new word's rate applies.
+  wire        h_fast   = full && txf_dout[43];
+  wire [15:0] t_half   = (full && trate) ? ph2f_e : ph2n_e;
+  wire [15:0] t_div    = (full && trate) ? div2 : div;
+  wire [15:0] qpt      = t_div - 16'd1 - {2'b00, t_div[15:2]};   // quarter bit after the start
 
   wire [4:0] tx_idx   = tx_msb ? (tx_len - tx_cnt) : tx_cnt;
   wire       data_bit = tx_sh[tx_idx];
@@ -389,6 +463,9 @@ module pg_wire #(
   wire a_nocrc   = tx_attr[1];
   wire a_crcout  = tx_attr[3];
   wire a_se0     = tx_attr[4];
+  wire a_fast    = full && tx_attr[6];
+  wire a_pp      = full && tx_attr[7];
+  wire a_raw     = full && tx_attr[8];
   wire h_crcinit = full && txf_dout[39];
   wire h_after   = full && txf_dout[42];
 
@@ -402,25 +479,38 @@ module pg_wire #(
   wire crc_upd    = full && !stuffing && !a_nocrc && !in_crc;
   wire [31:0] tcrc_n = crc_step(tcrc, cur_bit, crc_lm1, poly, crc_mask);
   wire [31:0] tcrc_o = (crc_upd ? tcrc_n : tcrc) ^ (crc_xor ? crc_mask : 32'd0);
+  // Biphase: mark = transition at every bit start, a 1 adds one at mid-bit;
+  // differential Manchester = transition at every mid-bit, a 0 adds one at the start
+  wire bph_first  = bph_dm ? (lvl_prev ^ !cur_bit) : !lvl_prev;
+  wire bph_lvl    = second ? (bph_first ^ (bph_dm | cur_bit)) : bph_first;
   wire lvl_cur    = a_se0 ? 1'b0 :
+                    a_raw ? cur_bit :
                     nrzi  ? (lvl_prev ^ !cur_bit) :
-                    manch ? (cur_bit ^ !second) : cur_bit;
+                    manch ? (cur_bit ^ !second) :
+                    bph   ? bph_lvl : cur_bit;
 
   // CLK_WAIT: hold the timer in the second half while the clock pin is low
   wire hold       = clk_wait && second && !ck_in;
   wire int_sample = !clk_ext && tx_busy &&
-                    (clk_wait ? (second && ck_in && !sampled) : ((tmr == half) && !second));
+                    (clk_wait ? (second && ck_in && !sampled) : ((tmr == t_half) && !second));
   wire int_end    = !clk_ext && tx_busy && (tmr == 16'd0) && !hold;
 
   wire word_done  = int_end && !next_stuff && tx_last;
   wire crc_follow = word_done && a_crcout && !in_crc;
 
   wire can_go     = !h_after || turn_go;
+  // RSW_SP: the next word has the other rate; switch at the sample point of
+  // this word's last bit (CAN FD: BRS and the CRC delimiter)
+  wire sw_sp      = rsw_sp && int_sample && tx_last && !stuffing && !next_stuff &&
+                    !(a_crcout && !in_crc) && tx_en && !txf_empty && can_go && (h_fast != trate);
   wire ext_ready  = !boundary || ext_launch || stretching;
   wire tx_load    = tx_en && !txf_empty && can_go &&
                     (clk_ext ? (!tx_busy && ext_ready)
                              : (!tx_busy || (word_done && !crc_follow)));
   assign txf_pop = tx_load;
+  wire        trs      = full && (tx_load ? h_fast : trate);
+  wire [8:0]  tacc_sum = {1'b0, tacc} + {1'b0, trs ? frac2 : frac};
+  wire [15:0] tbit_m1  = (trs ? div2 : div) - 16'd1 + {15'd0, tacc_sum[8]};
 
   wire late_phase = tx_late && !clk_ext && tx_busy && !second && (tmr > qpt);
   wire itail_on   = (itail != 2'd0);
@@ -436,7 +526,8 @@ module pg_wire #(
       tx_sh    <= 32'd0;
       tx_cnt   <= 5'd0;
       tx_len   <= 5'd0;
-      tx_attr  <= 6'd0;
+      tx_attr  <= 9'd0;
+      trate    <= 1'b0;
       tx_msb   <= 1'b0;
       in_crc   <= 1'b0;
       stuffing <= 1'b0;
@@ -468,7 +559,8 @@ module pg_wire #(
         itail    <= 2'd0;
         tx_sh    <= txf_dout[31:0];
         tx_len   <= txf_dout[36:32];
-        tx_attr  <= txf_dout[42:37];
+        tx_attr  <= txf_dout[45:37];
+        trate    <= h_fast;
         tx_msb   <= msb_first;
         in_crc   <= 1'b0;
         stuffing <= 1'b0;
@@ -509,8 +601,12 @@ module pg_wire #(
           end
         end else if (!hold) begin
           tmr <= tmr - 16'd1;
-          if (tmr == half) second <= 1'b1;
+          if (tmr == t_half) second <= 1'b1;
           if (int_sample)  sampled <= 1'b1;
+          if (sw_sp) begin                   // rest of this bit at the next word's rate
+            trate <= h_fast;
+            tmr   <= (h_fast ? ph2f_e : ph2n_e) - 16'd1;
+          end
         end else if (int_sample) begin
           sampled <= 1'b1;
         end
@@ -599,16 +695,19 @@ module pg_wire #(
   reg        rlvl;          // previous sampled level (NRZI decode)
   reg [2:0]  rrun;          // run length for destuffing
   reg        rlast;         // previous decoded bit
-  reg [7:0]  rbits;         // decoded bits since the frame start (saturating), for RX_SKIP and ACKBIT
+  reg [9:0]  rbits;         // decoded bits since the frame start (saturating), for RX_SKIP, ACKBIT, CAN FD
   reg [3:0]  rwidx;         // words completed in this packet (saturating), for RXMATCH
   reg [2:0]  irun;          // consecutive idle-level samples (EOF_RUN)
   reg [31:0] rcrc;
   reg        mskip;         // Manchester MSTART: the next edge is the start bit's mid-bit transition
-  reg        synced;        // SYNC pattern found in this packet
+  reg        synced;        // SYNC pattern (or biphase preamble) found in this packet
   reg        rfirst;        // the next sample is the first of the frame (glitch check)
   reg  [7:0] hunt;          // last decoded bits (SYNC hunt)
-  wire [8:0] racc_sum = {1'b0, racc} + {1'b0, frac};
-  wire [15:0] rbit_m1 = div - 16'd1 + {15'd0, racc_sum[8]};
+  reg        rrate;         // RX bit period: 0 = DIV, 1 = DIV2 (CAN FD data phase)
+  wire [15:0] r_div   = (full && rrate) ? div2 : div;
+  wire [15:0] r_half  = (full && rrate) ? ph2f_e : ph2n_e;
+  wire [8:0] racc_sum = {1'b0, racc} + {1'b0, (full && rrate) ? frac2 : frac};
+  wire [15:0] rbit_m1 = r_div - 16'd1 + {15'd0, racc_sum[8]};
 
   always @(posedge clk) begin
     if (srst) samp_d <= 7'd0;
@@ -617,6 +716,7 @@ module pg_wire #(
 
   wire       async_mode = rx_async && !clk_ext;
   wire       mrx        = (MRX != 0) && manch && async_mode;   // Manchester RX: edge timing, no bit grid
+  wire       brx        = (MRX != 0) && bph && async_mode;     // biphase RX: edge intervals
   wire       int_samp_d = (rx_delay == 3'd0) ? int_sample : samp_d[rx_delay - 3'd1];
   // RX words take the length of the TX word whose bit is sampled. With
   // RX_DELAY the sample comes after the nominal point, possibly in the next
@@ -629,11 +729,52 @@ module pg_wire #(
                           (!clk_ext && rx_delay != 3'd0) ? slen : len_now;
   wire [4:0] rx_idx     = msb_first ? (rx_len - rx_cnt) : rx_cnt;
 
+  wire       rx_edge    = (rx_in != rx_prev);
+  // DIFF links are half duplex: RX ignores the line while TX drives it.
+  wire       rx_mute    = diff && tx_busy;
+
+  // Biphase RX: rtmr counts the cycles since the last edge
+  reg  [2:0] bst;           // 0 at a bit start, 1 after a short interval, 2..4 in a preamble
+  reg  [1:0] ptype;         // preamble type
+  reg  [2:0] b_next;
+  wire [16:0] d17       = {1'b0, div};
+  wire [16:0] q17       = {3'b000, div[15:2]};
+  wire       b_s        = (rtmr < d17 - q17);                // < 3/4 bit
+  wire       b_l        = (rtmr < d17 + q17);                // < 5/4 bit
+  wire       b_v        = (rtmr < {div, 1'b0} - q17);        // < 7/4 bit
+  wire       b_edge     = brx && rx_busy && rx_edge && !rx_mute;
+  wire       b_end      = brx && rx_busy && !rx_edge && (rtmr == {div, 1'b0});
+  wire       b_emit     = b_edge && (((bst == 3'd0) && !b_s && b_l) || ((bst == 3'd1) && b_s));
+  wire       b_bit      = (bst == 3'd1) ^ bph_dm;              // mark: two shorts = 1, long = 0
+  wire       b_pend     = b_edge && (bst == 3'd4);             // preamble over: data bit 0 starts
+  always @(*) begin
+    case (bst)
+      3'd0:    b_next = b_s ? 3'd1 : (b_l || !b_v) ? 3'd0 : 3'd2;
+      3'd1:    b_next = (b_s || b_l || !b_v) ? 3'd0 : 3'd2;
+      3'd2:    b_next = 3'd3;
+      3'd3:    b_next = 3'd4;
+      default: b_next = 3'd0;
+    endcase
+  end
+
+  // CAN FD RX unit state (it also follows classic frames: fd_cls)
+  reg        fd_ide, fd_pkt, fd_brsd, fd_dk, fd_tail, fd_done, fd_dlm, fd_fsb, fd_c21, fd_scok, fd_crcok, fd_cls;
+  reg  [3:0] fd_dlc;
+  reg  [9:0] fd_dend;       // number of the last data bit
+  reg  [4:0] fd_tn;         // stuff count + CRC bits received so far
+  reg  [2:0] fd_dsc;        // dynamic stuff bits mod 8
+  reg  [2:0] rhist;         // last decoded bits
+  reg [16:0] crc17;
+  reg [20:0] crc21;
+  wire       fd_on      = fdu && fd_en && async_mode && !mrx && !brx;
+  wire       fd_fix     = fd_on && fd_tail && !fd_cls;          // fixed stuffing (CRC field)
+  wire       fd_nost    = fd_on && (fd_cls ? fd_dlm : fd_done); // no stuffing after the CRC field
+
   // Bit-level decode (async RX)
-  wire       dbit       = nrzi ? (rx_in == rlvl) : rx_in;
-  wire       rstuff_on  = async_mode && (stuff_n != 3'd0);
-  wire       rx_is_stuf = rstuff_on && (rrun == stuff_n);
-  wire       rstuf_bad  = stuff_eq ? (dbit == rlast) : dbit;
+  wire       dbit       = brx ? b_bit : nrzi ? (rx_in == rlvl) : rx_in;
+  wire       rstuff_on  = async_mode && (stuff_n != 3'd0) && !fd_nost;
+  wire       rx_is_stuf = fd_fix ? fd_fsb : (rstuff_on && (rrun == stuff_n));
+  wire       rstuf_bad  = (fd_fix || stuff_eq) ? (dbit == rlast) : dbit;
   wire [2:0] rrun_n     = stuff_eq ? ((dbit == rlast) ? rrun + 3'd1 : 3'd1)
                                    : (dbit ? rrun + 3'd1 : 3'd0);
   wire       se0_in     = diff && !rx_in && !gt_in;
@@ -641,35 +782,156 @@ module pg_wire #(
   wire [31:0] rx_word   = rx_sh | ({31'd0, dbit} << rx_idx);
   // Async start: an edge from idle to active. A frame whose first sample
   // (middle of the start bit) is back at idle was a glitch and is dropped.
-  // DIFF links are half duplex: RX ignores the line while TX drives it.
-  wire       rx_mute    = diff && tx_busy;
   assign     rx_start   = async_mode && !rx_busy && !rx_mute && (rx_in != idle) && (rx_prev == idle);
-  wire       rx_glitch  = async_mode && !mrx && rfirst && (rx_in == idle) && !se0_in;
+  wire       rx_glitch  = async_mode && !mrx && !brx && rfirst && (rx_in == idle) && !se0_in;
   // Manchester: rtmr counts down from 2*DIV at each mid-bit transition. An
   // edge at least DIV - DIV/4 cycles after it is the next one (rtmr <=
   // DIV + DIV/4 + 1); none for 2 bits (rtmr == 0) ends the frame.
-  wire       rx_edge    = (rx_in != rx_prev);
   wire [16:0] m_thr     = {1'b0, div} + {3'b000, div[15:2]} + 17'd1;
   wire       m_edge     = mrx && rx_busy && rx_edge && !rx_mute && (mskip || (rtmr <= m_thr));
   wire       m_end      = mrx && rx_busy && !rx_edge && (rtmr == 17'd0);
   wire       rx_sample  = mrx        ? ((m_edge && !mskip) || m_end) :
-                          async_mode ? (rx_busy && (rtmr == {1'b0, half}))
+                          brx        ? (b_emit || b_end) :
+                          async_mode ? (rx_busy && (rtmr == {1'b0, r_half}))
                                      : (clk_ext ? ext_sample : int_samp_d);
   wire       rx_eof     = rx_packet && (eof_run != 3'd0) && (rx_in == idle) &&
                           ({1'b0, irun} + 4'd1 >= {1'b0, eof_run});
-  wire       rx_eop     = mrx ? m_end : (rx_sample && rx_packet && (se0_in || rx_eof));
+  wire       rx_eop     = mrx ? m_end : brx ? b_end : (rx_sample && rx_packet && (se0_in || rx_eof));
   wire       rx_data    = rx_sample && !rx_eop && !rx_glitch && !rx_is_stuf;
   wire       hunting    = sync_en && !synced;
   wire       rx_dval    = rx_data && !hunting;     // a delivered data bit
   wire [7:0] hunt_n     = msb_first ? {hunt[6:0], dbit} : {dbit, hunt[7:1]};
   wire       rx_last    = (rx_cnt == rx_len);
   assign     rx_pkt_end = rx_eop;
+  wire [9:0] bn         = rbits + 10'd1;           // number of the bit being decoded (1 = first)
+
+  // CAN FD: positions (SOF = bit 1): IDE 14, FDF 15 (34 in an extended
+  // frame), BRS FDF+2, DLC FDF+4..FDF+7, then the data bytes, then the CRC
+  // field: stuff count (4) and CRC-17 (up to 16 data bytes) or CRC-21, with
+  // a fixed stuff bit before it and after every 4 bits.
+  function [6:0] fd_bytes;
+    input [3:0] d;
+    case (d)
+      4'd9:    fd_bytes = 7'd12;
+      4'd10:   fd_bytes = 7'd16;
+      4'd11:   fd_bytes = 7'd20;
+      4'd12:   fd_bytes = 7'd24;
+      4'd13:   fd_bytes = 7'd32;
+      4'd14:   fd_bytes = 7'd48;
+      4'd15:   fd_bytes = 7'd64;
+      default: fd_bytes = {3'd0, d};
+    endcase
+  endfunction
+  wire [9:0] fdf_pos    = fd_ide ? 10'd34 : 10'd15;
+  wire       fd_dv      = fd_on && rx_dval;
+  wire [3:0] fd_d4      = {rhist, dbit};
+  wire [6:0] fd_nb      = fd_bytes(fd_d4);
+  wire       fd_brs     = fd_dv && fd_pkt && (bn == fdf_pos + 10'd2) && dbit;
+  wire       fd_dlcb    = fd_dv && fd_pkt && !fd_dk && (bn == fdf_pos + 10'd7);
+  // classic frame: r0 at bit 15 (r1 at 34) dominant, DLC ends at bit 19 (39)
+  wire       fd_clsb    = fd_dv && !fd_pkt && !fd_dk && (bn == (fd_ide ? 10'd39 : 10'd19));
+  wire [3:0] fd_c8      = (fd_d4 > 4'd8) ? 4'd8 : fd_d4;
+  wire       fd_dend_b  = fd_dv && fd_dk && !fd_tail && !fd_done && (bn == fd_dend);
+  wire       fd_tdat    = fd_dv && fd_tail;                     // a stuff count or CRC bit
+  wire [4:0] fd_tlen    = fd_cls ? 5'd15 : fd_c21 ? 5'd25 : 5'd21;
+  wire       fd_dlmb    = fd_dv && fd_done && !fd_dlm;          // the CRC delimiter
+  wire [2:0] fd_gray    = fd_dsc ^ {1'b0, fd_dsc[2:1]};
+  wire       fd_crc0    = fd_cls ? ((rcrc & crc_mask) == 32'd0) :      // classic: the CRC unit (CRC-15)
+                          fd_c21 ? (crc21 == 21'd0) : (crc17 == 17'd0);
+  wire       fd_ok      = fd_crc0 && (fd_cls || fd_scok);
+  wire       fd_tail_c  = fd_tail && fd_cls;
+  wire       fd_cbit    = fd_on && rx_sample && !rx_eop && !rx_glitch && !(fd_fix && fd_fsb) && !fd_done && !fd_tail_c;
+  wire       fd_fb17    = dbit ^ crc17[16];
+  wire       fd_fb21    = dbit ^ crc21[20];
+
+  always @(posedge clk) begin
+    if (srst || !fdu) begin
+      {fd_ide, fd_pkt, fd_brsd, fd_dk, fd_tail, fd_done, fd_dlm, fd_fsb, fd_c21, fd_scok, fd_crcok, fd_cls} <= 12'd0;
+      fd_dlc  <= 4'd0;
+      fd_dend <= 10'd0;
+      fd_tn   <= 5'd0;
+      fd_dsc  <= 3'd0;
+      rhist   <= 3'd0;
+      crc17   <= 17'd0;
+      crc21   <= 21'd0;
+    end else if (rx_start) begin
+      {fd_ide, fd_pkt, fd_brsd, fd_dk, fd_tail, fd_done, fd_dlm, fd_fsb, fd_c21, fd_scok, fd_crcok, fd_cls} <= 12'd0;
+      fd_dlc  <= 4'd0;
+      fd_tn   <= 5'd0;
+      fd_dsc  <= 3'd0;
+      crc17   <= 17'h10000;             // ISO CAN FD: 1 followed by zeros
+      crc21   <= 21'h100000;
+    end else begin
+      if (fd_cbit) begin                // SOF..stuff count, dynamic stuff bits included
+        crc17 <= {crc17[15:0], 1'b0} ^ (fd_fb17 ? 17'h1685B : 17'd0);
+        crc21 <= {crc21[19:0], 1'b0} ^ (fd_fb21 ? 21'h102899 : 21'd0);
+      end
+      if (fd_on && rx_sample && rx_is_stuf && !fd_fix && !rx_eop && !rx_glitch) fd_dsc <= fd_dsc + 3'd1;
+      if (fd_dv) rhist <= {rhist[1:0], dbit};
+      if (fd_dv && bn == 10'd14) fd_ide <= dbit;
+      if (fd_dv && bn == fdf_pos && !fd_pkt) fd_pkt <= dbit;
+      if (fd_brs) fd_brsd <= 1'b1;
+      if (fd_dlcb) begin
+        fd_dk   <= 1'b1;
+        fd_dlc  <= fd_d4;
+        fd_c21  <= (fd_d4 > 4'd10);
+        fd_dend <= bn + {fd_nb, 3'b000};
+      end
+      if (fd_clsb) begin
+        fd_dk   <= 1'b1;
+        fd_cls  <= 1'b1;
+        fd_dlc  <= fd_d4;
+        fd_dend <= bn + {3'd0, fd_c8, 3'b000};
+      end
+      if ((fd_dlcb && fd_nb == 7'd0) || (fd_clsb && fd_c8 == 4'd0) || fd_dend_b) begin   // the CRC field follows
+        fd_tail <= 1'b1;
+        fd_fsb  <= !fd_cls && !fd_clsb;
+        fd_tn   <= 5'd0;
+      end
+      if (fd_fix && rx_sample && fd_fsb && !rx_eop) fd_fsb <= 1'b0;   // fixed stuff bit removed
+      if (fd_tdat) begin
+        fd_tn <= fd_tn + 5'd1;
+        if (fd_tn == 5'd3) fd_scok <= (fd_d4 == {fd_gray, ^fd_gray});
+        if (fd_tn[1:0] == 2'd3 && fd_tn + 5'd1 < fd_tlen && !fd_cls) fd_fsb <= 1'b1;
+        if (fd_tn + 5'd1 == fd_tlen) begin
+          fd_tail <= 1'b0;
+          fd_done <= 1'b1;
+        end
+      end
+      if (fd_dlmb) begin
+        fd_dlm   <= 1'b1;
+        fd_crcok <= fd_crc0;
+      end
+    end
+  end
+
+  // Automatic ACK (FDCTL.ACK_EN): a frame from another node whose CRC (and
+  // stuff count) check gets a dominant bit from TURN cycles after its CRC
+  // delimiter's sample point, one DIV long: the receiver ACK slot.
+  reg  [16:0] fa_cnt;
+  reg         fa_run;
+  wire        fa_go    = fd_acken && fd_dlmb && fd_ok && !(tx_busy && !arb_lost);
+  wire        fa_drive = fdu && fa_run && (fa_cnt < {1'b0, div});
+  always @(posedge clk) begin
+    if (srst || !fdu) begin
+      fa_run <= 1'b0;
+      fa_cnt <= 17'd0;
+    end else if (fa_go) begin
+      fa_run <= 1'b1;
+      fa_cnt <= {1'b0, turn} + {1'b0, div};
+    end else if (fa_run) begin
+      if (fa_cnt == 17'd0) fa_run <= 1'b0;
+      else                 fa_cnt <= fa_cnt - 17'd1;
+    end
+  end
 
   // ACKBIT: when decoded bit ack_n (1 = the first bit of the packet) is
   // sampled and the RX CRC over the bits before it is zero, AFTER_RX words
   // start TURN cycles later (a reply inside the packet: the CAN ACK slot).
-  wire       ack_hit    = full && ack_arm && rx_dval && (rbits + 8'd1 == ack_n);
-  assign     ack_fire   = ack_hit && ((rcrc & crc_mask) == 32'd0);
+  // ack_n = 0 (CAN FD unit): at the CRC delimiter of an FD frame that checks.
+  wire       ack_fd     = fdu && (ack_n == 10'd0);
+  wire       ack_hit    = full && ack_arm && (ack_fd ? fd_dlmb : (rx_dval && (bn == ack_n)));
+  assign     ack_fire   = ack_hit && (ack_fd ? (fd_crc0 && fd_scok) : ((rcrc & crc_mask) == 32'd0));
 
   reg        end_pend;      // end marker still to push after a partial last word
   reg  [4:0] end_bits;
@@ -678,10 +940,12 @@ module pg_wire #(
   wire ev_end    = (rx_eop && !part_push) || end_pend;
   wire ev_push   = events && (f_start || f_stop || ev_end) && !data_push && !part_push;
   wire [4:0] ev_bits = end_pend ? end_bits : 5'd0;
+  // CAN FD unit: frame status in the end marker (bits [20:16] = FDCTL[12:8])
+  wire [4:0] ev_fd   = (fdu && fd_en) ? {fd_scok, fd_crcok, fd_dlm, fd_brsd, fd_pkt} : 5'd0;
   assign rxf_push = data_push || part_push || ev_push;
   assign rxf_din  = data_push ? rx_word :
                     part_push ? rx_sh :
-                    {19'd0, ev_bits, 6'd0, f_stop || ev_end, f_start} | 32'h8000_0000;
+                    {11'd0, ev_fd, 3'd0, ev_bits, 6'd0, f_stop || ev_end, f_start} | 32'h8000_0000;
 
   always @(posedge clk) begin
     if (srst) begin
@@ -705,7 +969,7 @@ module pg_wire #(
       rlvl    <= 1'b1;
       rrun    <= 3'd0;
       rlast   <= 1'b1;
-      rbits   <= 8'd0;
+      rbits   <= 10'd0;
       rcrc    <= 32'd0;
       rwidx   <= 4'd0;
       irun    <= 3'd0;
@@ -714,6 +978,9 @@ module pg_wire #(
       synced  <= 1'b0;
       hunt    <= 8'd0;
       rfirst  <= 1'b0;
+      rrate   <= 1'b0;
+      bst     <= 3'd0;
+      ptype   <= 2'd0;
     end else begin
       if (rx_start)       rfirst <= 1'b1;
       else if (rx_sample) rfirst <= 1'b0;
@@ -723,10 +990,10 @@ module pg_wire #(
         rtmr    <= {div, 1'b0};
         mskip   <= rx_start ? mstart : 1'b0;
       end
-      if (rx_start || (resync && !mrx && rx_busy && rx_in != rx_prev)) begin
-        if (!mrx) begin              // a start edge, or (RESYNC) any edge: realign the bit timer
+      if (rx_start || (resync && !mrx && !brx && rx_busy && rx_edge)) begin
+        if (!mrx && !brx) begin      // a start edge, or (RESYNC) any edge: realign the bit timer
           rx_busy <= 1'b1;
-          rtmr    <= {1'b0, div - 16'd1};
+          rtmr    <= {1'b0, (rx_start ? div : r_div) - 16'd1};
         end
         if (rx_start) begin
           synced <= 1'b0;
@@ -735,15 +1002,16 @@ module pg_wire #(
           rlvl  <= idle;
           rrun  <= 3'd0;
           rlast <= idle;
-          rbits <= 8'd0;
+          rbits <= 10'd0;
           rwidx <= 4'd0;
           irun  <= 3'd0;
           match_ok <= (rxmatch[15:8] == 8'd0);
           rcrc  <= crcinit;
           rx_sh <= 32'd0;
           rx_cnt <= 5'd0;
+          rrate <= 1'b0;
         end
-      end else if (rx_busy && !(mrx && m_edge)) begin
+      end else if (rx_busy && !(mrx && m_edge) && !brx) begin
         if (rtmr == 17'd0) begin
           if (!mrx) begin
             rtmr <= {1'b0, rbit_m1};
@@ -753,6 +1021,24 @@ module pg_wire #(
           rtmr <= rtmr - 17'd1;
         end
       end
+      // Biphase: restart the interval count at every edge
+      if (brx && (rx_start || b_edge)) begin
+        rx_busy <= 1'b1;
+        rtmr    <= 17'd0;
+        bst     <= rx_start ? 3'd0 : b_next;
+        if (b_edge && bst == 3'd2) ptype <= b_s ? 2'd1 : b_l ? 2'd3 : 2'd2;
+      end else if (brx && rx_busy && rtmr != {div, 1'b0}) begin
+        rtmr    <= rtmr + 17'd1;
+      end
+      // CAN FD: data bit rate from the sample point of BRS to that of the CRC delimiter
+      if (fd_brs) begin
+        rrate <= 1'b1;
+        rtmr  <= {1'b0, ph2f_e - 16'd1};
+      end
+      if (fd_dlmb && rrate) begin
+        rrate <= 1'b0;
+        rtmr  <= {1'b0, ph2n_e - 16'd1};
+      end
 
       if (f_start || f_stop) begin
         rx_sh  <= 32'd0;
@@ -761,6 +1047,11 @@ module pg_wire #(
         rx_sh   <= 32'd0;
         rx_cnt  <= 5'd0;
         rx_busy <= 1'b0;
+        rrate   <= 1'b0;
+      end else if (b_pend) begin       // biphase preamble: the word restarts with its type
+        rx_sh   <= {30'd0, ptype};
+        rx_cnt  <= 5'd2;
+        synced  <= 1'b1;
       end else if (rx_sample) begin
         rlvl <= rx_in;
         irun <= (rx_in == idle) ? ((irun == 3'd7) ? irun : irun + 3'd1) : 3'd0;
@@ -775,12 +1066,12 @@ module pg_wire #(
           rrun  <= rrun_n;
           rlast <= dbit;
           hunt  <= hunt_n;
-          if (hunt_n == sync_pat) synced <= 1'b1;
+          if ((!brx || sync_pat != 8'd0) && hunt_n == sync_pat) synced <= 1'b1;
         end else begin
           rrun  <= rrun_n;
           rlast <= dbit;
-          if (rbits != 8'd255) rbits <= rbits + 8'd1;
-          if (full && rbits >= {3'd0, rx_skip}) rcrc <= crc_step(rcrc, dbit, crc_lm1, poly, crc_mask);
+          if (rbits != 10'd1023) rbits <= rbits + 10'd1;
+          if (full && rbits >= {5'd0, rx_skip}) rcrc <= crc_step(rcrc, dbit, crc_lm1, poly, crc_mask);
           if (rx_last) begin
             rx_sh   <= 32'd0;
             rx_cnt  <= 5'd0;
@@ -831,11 +1122,13 @@ module pg_wire #(
 
   // Pin-side values. They leave the engine through flip-flops (below), so the
   // pins never glitch and the pin mux / pad path starts at a register.
-  wire tx_on_c  = en && tx_en;
-  wire tx_val_c = od ? 1'b0 : drv_line;
-  wire tx_oe_c  = (oe_mode == 2'd0) ? 1'b1 :
+  wire tx_on_c  = en && (tx_en || fa_drive);
+  wire pp_now   = od && tx_busy && a_pp;     // PP word in open-drain mode (I3C)
+  wire tx_val_c = ((od && !pp_now) || fa_drive) ? 1'b0 : drv_line;
+  wire tx_oe_c  = fa_drive          ? 1'b1 :
+                  (oe_mode == 2'd0) ? 1'b1 :
                   (oe_mode == 2'd1) ? (gated ? active : (tx_busy || tail || itail_on)) :
-                  od                ? !drv_line : 1'b0;
+                  od                ? (pp_now || !drv_line) : 1'b0;
   // CLK pin: bit clock, stretch (external clock), or the differential pair's second line
   wire clk_on_c  = en && ((diff && tx_en) || (clk_out && !clk_ext) || (clk_ext && stretching));
   wire clk_val_c = diff ? (se0_now ? 1'b0 : !drv_line) :
@@ -882,27 +1175,64 @@ module pg_wire #(
         R_CTRL:    rdata = {4'd0, ctrl};
         R_DIV:     rdata = {16'd0, div};
         R_PINS:    rdata = {3'd0, gtpin, 3'd0, ckpin, 3'd0, rxpin, 3'd0, txpin};
-        R_CTRL2:   rdata = {9'd0, ctrl2};
-        R_TXATTR:  rdata = full ? {26'd0, txattr} : 32'd0;
+        R_CTRL2:   rdata = {7'd0, ctrl2};
+        R_TXATTR:  rdata = full ? {23'd0, txattr} : 32'd0;
         R_CRCCFG:  rdata = full ? {7'd0, crccfg} : 32'd0;
         R_CRCINIT: rdata = full ? crcinit : 32'd0;
         R_RXCRC:   rdata = full ? rcrc : 32'd0;
         R_TURN:    rdata = full ? {16'd0, turn} : 32'd0;
         R_CRCPOLY: rdata = full ? poly : 32'd0;
         R_RXMATCH: rdata = full ? {12'd0, rxmatch} : 32'd0;
-        R_ACKBIT:  rdata = full ? {23'd0, ack_arm, ack_n} : 32'd0;
+        R_ACKBIT:  rdata = full ? {15'd0, ack_arm, 6'd0, ack_n} : 32'd0;
+        default:   rdata = 32'd0;
+      endcase
+    end else if (reg2_sel && full) begin
+      case (ra)
+        R2_DIV2:   rdata = {8'd0, frac2, div2};
+        R2_PHASE:  rdata = {ph2f, ph2n};
+        R2_FDCTL:  rdata = fdu ? {9'd0, fd_dsc, fd_dlc, 3'd0, fd_scok, fd_crcok, fd_dlm, fd_brsd, fd_pkt,
+                                  6'd0, fd_acken, fd_en} : 32'd0;
         default:   rdata = 32'd0;
       endcase
     end
   end
 
   wire cfg_wr = acc && write && reg_sel;
+  wire cfg_wr2 = write && reg2_sel && full;
+
+  // Second page: second bit period, sample points, CAN FD unit
+  always @(posedge clk) begin
+    if (rst || !full) begin
+      div2  <= 16'd2;
+      frac2 <= 8'd0;
+      ph2n  <= 16'd0;
+      ph2f  <= 16'd0;
+      fd_en <= 1'b0;
+      fd_acken <= 1'b0;
+    end else if (cfg_wr2) begin
+      case (ra)
+        R2_DIV2: begin
+          div2  <= (wdata[15:0] < 16'd2) ? 16'd2 : wdata[15:0];
+          frac2 <= wdata[23:16];
+        end
+        R2_PHASE: begin
+          ph2n  <= wdata[15:0];
+          ph2f  <= wdata[31:16];
+        end
+        R2_FDCTL: begin
+          fd_en    <= fdu && wdata[0];
+          fd_acken <= fdu && wdata[1];
+        end
+        default: ;
+      endcase
+    end
+  end
 
   always @(posedge clk) begin
     if (rst) begin
       ctrl    <= 28'd0;
-      ctrl2   <= 23'd0;
-      txattr  <= 6'd0;
+      ctrl2   <= 25'd0;
+      txattr  <= 9'd0;
       crccfg  <= 25'd0;
       crcinit <= 32'd0;
       poly    <= 32'd0;
@@ -916,8 +1246,8 @@ module pg_wire #(
     end else if (cfg_wr) begin
       case (ra)
         R_CTRL:    ctrl    <= wdata[27:0];
-        R_CTRL2:   ctrl2   <= wdata[22:0] & CTRL2_MASK;
-        R_TXATTR:  txattr  <= wdata[5:0];
+        R_CTRL2:   ctrl2   <= wdata[24:0] & CTRL2_MASK;
+        R_TXATTR:  txattr  <= wdata[8:0];
         R_CRCCFG:  crccfg  <= wdata[24:0] & CRCCFG_MASK;
         R_CRCINIT: crcinit <= wdata;
         R_CRCPOLY: poly    <= wdata;
@@ -939,13 +1269,13 @@ module pg_wire #(
   // received; it disarms at that bit or at the end of the packet.
   always @(posedge clk) begin
     if (srst || !full) begin
-      ack_n   <= 8'd0;
+      ack_n   <= 10'd0;
       ack_arm <= 1'b0;
       ack_pkt <= 1'b0;
     end else if (cfg_wr && ra == R_ACKBIT) begin
-      ack_n   <= wdata[7:0];
-      ack_arm <= wdata[8];
-      ack_pkt <= wdata[8];
+      ack_n   <= wdata[9:0];
+      ack_arm <= wdata[16];
+      ack_pkt <= wdata[16];
     end else begin
       if (ack_hit || rx_pkt_end) ack_arm <= 1'b0;
       if (rx_pkt_end)            ack_pkt <= 1'b0;
@@ -955,7 +1285,7 @@ module pg_wire #(
   // Read-back compare on words that are not NOSTUFF (CAN: the arbitration and
   // data fields; the ACK slot is in a NOSTUFF word, where a dominant bit is an
   // acknowledgement, not a lost arbitration)
-  wire arb_check = (od || arb_stop) && tx_busy && !a_nostuff && line && !rx_in &&
+  wire arb_check = (od || arb_stop) && tx_busy && !a_nostuff && !a_fast && line && !rx_in &&
                    (clk_ext ? ext_sample : int_sample);
 
   wire _unused = &{1'b0, tx_attr[2]};   // CRC_INIT acts at load time

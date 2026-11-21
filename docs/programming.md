@@ -105,6 +105,9 @@ The example runs on a lite engine: it switches a debug port from JTAG to SWD, re
 | NRZI / Manchester, bit stuffing, CRC | engine `CTRL2` / `TXATTR` / `wire_crc()` |
 | An answer within a few bit times of a received packet | queue it with `WIRE_A_AFTER_RX`; the engine sends it `TURN` cycles after the matching packet (`RXMATCH`) |
 | An answer inside a packet, e.g. the CAN ACK slot | the same AFTER_RX word plus `ACKBIT = WIRE_ACK_AT(n)`: it leaves `TURN` cycles after RX bit n if the CRC checks (`can_recv_ack`) |
+| Two bit rates in one frame (CAN FD) | `DIV2` and `WIRE_A_FAST` words; `WIRE_RSW_SP` switches at the sample point |
+| Open drain for some words, push-pull for others (I3C) | `WIRE_OE_OPEN_DRAIN` plus `WIRE_A_PP` on the push-pull words |
+| A line-code violation (sync, preamble) inside a coded stream | a `WIRE_A_RAW` word (with `WIRE_A_FAST` for half-bit steps) |
 | Pulse widths, odd timing, anything else | timed GPIO (`pin_out_at`, `pins_out_at`, `pin_oe_at`) and edge capture |
 | Several protocols at once | one engine each; `wait_events()` sleeps until any of them has data |
 
@@ -142,6 +145,12 @@ The program, its data and a 256-byte stack share 3.5 KB (the top 256 bytes are t
 | 10BASE-T | `eth_init`, `eth_send` (transmit); `eth_rx_init`, `eth_recv`, `ETH_CRC_RESIDUAL` (receive, W1) |
 | Manchester RX, sync (W1) | `WIRE_MANCHESTER` on async RX, `WIRE_MSTART`, `wire_sync()` |
 | CAN 2.0A | `can_init`, `can_send`, `can_recv`, `can_recv_ack` (receiver ACK), `can_parse`, `can_frame_t` |
+| CAN FD (W0) | `canfd_init`, `canfd_send`, `canfd_recv`, `canfd_frame_t`, `canfd_dlc`, `FDCTL_*` |
+| S/PDIF, AES3 | `spdif_tx_init`, `spdif_put` (any full engine); `spdif_rx_init`, `spdif_get` (W1); `SPDIF_B/M/W` |
+| USB Power Delivery (W1) | `pd_init`, `pd_send`, `pd_recv`, `PD_HEADER`, `PD_HDR_*`, `PD_CTRL_*`, `PD_DATA_*` |
+| SMPTE LTC | `ltc_init`, `ltc_send`, `ltc_decode`, `ltc_time_t` |
+| MIPI I3C SDR | `i3c_init`, `i3c_start`, `i3c_stop`, `i3c_header`, `i3c_write`, `i3c_read`, `i3c_ccc`, `i3c_read_msg` |
+| Second bit rate, biphase | `w->DIV2`, `WIRE_DIV2_FIX8`, `w->PHASE`, `WIRE_PHASE`, `WIRE_A_FAST`, `WIRE_A_PP`, `WIRE_A_RAW`, `WIRE_RSW_SP`, `WIRE_BIPHASE`, `WIRE_BIPHASE_DM` |
 | SWD, JTAG | `WIRE_SWD`, `swd_connect`, `swd_xfer`, `SWD_REQ`; `WIRE_JTAG`, `jtag_tms`, `jtag_shift`, `JTAG_*` TMS sequences |
 | Several protocols at once | `pt.h`: `PT_BEGIN`, `PT_WAIT`, `PT_YIELD`, `PT_END` (cooperative tasks); `job.h`: queue jobs (`JOB_ENTRY`, slots, mailbox) |
 
