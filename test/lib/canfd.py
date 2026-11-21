@@ -138,11 +138,19 @@ class CanFdNode:
         self.idle_since = 0
         self.state = "idle"
         self.tx_bits = None
+        self.queue = []         # frames sent one after the other (send_all)
+        self.gap_bits = 11      # idle bits before our own SOF (3 = right after the intermission)
 
     # ---- sending -------------------------------------------------------
     def send(self, fid, data, fd=True, brs=True, join_sof=False, bad_crc=False):
         self.pending = dict(fid=fid, data=list(data), fd=fd, brs=brs, bad_crc=bad_crc)
         self.join_sof = join_sof
+
+    def send_all(self, frames, gap_bits=3):
+        """Queue frames (dicts as for send) to go out back to back."""
+        self.gap_bits = gap_bits
+        self.queue = [dict(f) for f in frames[1:]]
+        self.send(**frames[0])
 
     def _wire(self):
         p = self.pending
@@ -171,7 +179,7 @@ class CanFdNode:
                     self.tx = 0
                 self._hard_sync(t)
             elif lvl == 1:
-                if self.pending and not self.join_sof and t - self.idle_since >= 11 * self.tn:
+                if self.pending and not self.join_sof and t - self.idle_since >= self.gap_bits * self.tn:
                     self.tx = 0                    # our SOF; hard sync on the edge next cycle
             else:
                 self.idle_since = t
@@ -311,6 +319,11 @@ class CanFdNode:
                                     acked=r["acked"], by=by))
             if by == self.name:
                 self.pending = None
+                if self.queue:
+                    q = self.queue.pop(0)
+                    self.pending = dict(fid=q["fid"], data=list(q["data"]), fd=q.get("fd", True),
+                                        brs=q.get("brs", True), bad_crc=q.get("bad_crc", False))
+                    self.join_sof = False
             self.tx_bits = None
             self.state = "idle"
             self.idle_since = t

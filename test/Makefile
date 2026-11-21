@@ -6,7 +6,7 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = pg_top.v pg_ahb.v pg_host_spi.v pg_sram.v pg_io.v pg_sysio.v pg_wire.v pg_fifo.v hazard3_alu.v hazard3_branchcmp.v hazard3_core.v hazard3_cpu_1port.v hazard3_csr.v hazard3_decode.v hazard3_frontend.v hazard3_instr_decompress.v hazard3_irq_ctrl.v hazard3_mul_fast.v hazard3_muldiv_seq.v hazard3_onehot_encode.v hazard3_onehot_priority.v hazard3_onehot_priority_dynamic.v hazard3_pmp.v hazard3_power_ctrl.v hazard3_priority_encode.v hazard3_regfile_1w2r.v hazard3_shift_barrel.v hazard3_triggers.v 
+PROJECT_SOURCES = pg_top.v pg_ahb.v pg_host_spi.v pg_sram.v pg_io.v pg_sysio.v pg_wire.v pg_fifo.v pg_dma.v hazard3_alu.v hazard3_branchcmp.v hazard3_core.v hazard3_cpu_1port.v hazard3_csr.v hazard3_decode.v hazard3_frontend.v hazard3_instr_decompress.v hazard3_irq_ctrl.v hazard3_mul_fast.v hazard3_muldiv_seq.v hazard3_onehot_encode.v hazard3_onehot_priority.v hazard3_onehot_priority_dynamic.v hazard3_pmp.v hazard3_power_ctrl.v hazard3_priority_encode.v hazard3_regfile_1w2r.v hazard3_shift_barrel.v hazard3_triggers.v 
 
 ifneq ($(GATES),yes)
 
@@ -63,7 +63,7 @@ TOPLEVEL = tb
 # Gate level (GATES=yes) runs a subset by default (boot, four-engine UART, UART baud rates): a whole RISC-V CPU at
 # gate level is slow, and some RTL tests look at internal signals.
 ifneq ($(GATES),yes)
-TESTS_DEFAULT = test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_i2c_sniff,test_sd_spi,test_usb,test_usb_hid,test_usb_host,test_eth,test_eth_rx,test_eth_ping,test_ws2812,test_pulse_codes,test_framing,test_mdio,test_smbus,test_dmx512,test_hd44780,test_onewire,test_can,test_swd,test_jtag,test_ps2,test_quad,test_mixed,test_queue,test_biss,test_qspi_flash,test_mil1553,test_arinc429,test_canfd,test_spdif,test_i3c,test_usb_pd
+TESTS_DEFAULT = test_boot,test_tgpio,test_uart,test_spi,test_i2c,test_i2c_sniff,test_sd_spi,test_usb,test_usb_hid,test_usb_host,test_eth,test_eth_rx,test_eth_ping,test_ws2812,test_pulse_codes,test_framing,test_mdio,test_smbus,test_dmx512,test_hd44780,test_onewire,test_can,test_swd,test_jtag,test_ps2,test_quad,test_mixed,test_queue,test_biss,test_qspi_flash,test_mil1553,test_arinc429,test_canfd,test_spdif,test_i3c,test_usb_pd,test_dma
 # Slow at real protocol speeds (milliseconds of bus time): make EXTENDED=yes, best with SIM=verilator
 TESTS_EXTENDED = test_lin,test_modbus,test_dali,test_ir_nec,test_ir_rx,test_gpio_protocols,test_cec,test_ps2_device,test_onewire_slave,test_eth_nlp,test_sbus,test_crsf,test_modbus_server,test_lin_slave,test_iolink,test_sdi12,test_kline,test_dht22,test_pdm_mic,test_iso7816,test_eth_autoneg,test_ltc
 ifeq ($(EXTENDED),yes)

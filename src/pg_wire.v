@@ -241,8 +241,9 @@ module pg_wire #(
     output wire        clk_val,
     output wire        clk_oe,
 
-    // Event: received data waiting (for EVWAIT in pg_io)
-    output wire        rx_avail
+    // Event: received data waiting (for EVWAIT in pg_io); TX FIFO has room (DMA pace)
+    output wire        rx_avail,
+    output wire        tx_room
 );
 
   localparam [3:0] R_TX = 4'd0, R_RX = 4'd1, R_STATUS = 4'd2, R_CTRL = 4'd3,
@@ -1147,6 +1148,7 @@ module pg_wire #(
   // ---------------------------------------------------------------------
   wire tx_active = tx_busy || (tail && !clk_ext) || itail_on || !txf_empty;
   assign rx_avail = en && !rxf_empty;
+  assign tx_room  = en && !txf_full;
 
   always @(*) begin
     ready = 1'b1;

@@ -17,6 +17,11 @@
  *   0x8000_0100 + 0x100*n  Wire Engine n (pg_wire), n = 0..NUM_WIRES-1;
  *                          engines n >= NUM_FULL are lite (pg_wire FULL = 0);
  *                          only engine 1 has the Manchester RX decoder (MRX)
+ *   0x8000_0500  DMA channels (pg_dma, at page NUM_WIRES + 1)
+ *
+ * The DMA is a second master on this register bus: in a cycle where it
+ * accesses a register, the CPU's access (if any) waits one cycle. EVWAIT
+ * events [10:9]: DMA channel 0/1 has words for C.
  *
  * A blocking access (full TX FIFO, empty RX FIFO, ...) holds HREADY low.
  * If it waits longer than BLK_TIMEOUT cycles it completes without effect:
@@ -51,7 +56,15 @@ module pg_io #(
     output reg  [5:0]  uo_out,
     output wire        host_irq,
     input  wire [7:0]  uio_in,
-    input  wire [4:0]  ui_in
+    input  wire [4:0]  ui_in,
+
+    // DMA SRAM port (to pg_ahb)
+    output wire        dma_req,
+    output wire        dma_we,
+    output wire [9:0]  dma_addr,
+    output wire [31:0] dma_wdata,
+    input  wire        dma_gnt,
+    input  wire [31:0] sram_rdata
 );
 
   // ---------------------------------------------------------------------
@@ -66,11 +79,25 @@ module pg_io #(
   wire [31:0] pin_in = {11'd0, in_s2[18:14], 2'd0, in_s2[13:0]};
 
   // ---------------------------------------------------------------------
+  // Bus masters: the DMA takes the bus in the cycles it needs it
+  // ---------------------------------------------------------------------
+  wire        dbus_req, dbus_write;
+  wire [31:0] dma_rdata;
+  wire [1:0]  dma_ev;
+  wire [11:0] dbus_addr;
+  wire [31:0] dbus_wdata;
+  wire        b_valid = valid || dbus_req;
+  wire        b_write = dbus_req ? dbus_write : write;
+  wire [11:0] b_addr  = dbus_req ? dbus_addr  : addr;
+  wire [31:0] b_wdata = dbus_req ? dbus_wdata : wdata;
+
+  // ---------------------------------------------------------------------
   // Decode
   // ---------------------------------------------------------------------
-  wire [3:0] page    = addr[11:8];
-  wire       sel_sys = valid && (page == 4'd0) && (addr[7:4] != 4'hF);
-  wire       sel_blk = valid && (page == 4'd0) && (addr[7:4] == 4'hF);
+  wire [3:0] page    = b_addr[11:8];
+  wire       sel_sys = b_valid && (page == 4'd0) && (b_addr[7:4] != 4'hF);
+  wire       sel_blk = b_valid && (page == 4'd0) && (b_addr[7:4] == 4'hF);
+  wire       sel_dma = b_valid && (page == NUM_WIRES + 1);
 
   wire [31:0] sys_rdata;
   wire        sys_ready;
@@ -82,9 +109,9 @@ module pg_io #(
       .clk     (clk),
       .rst     (rst),
       .valid   (sel_sys),
-      .write   (write),
-      .addr    (addr[7:0]),
-      .wdata   (wdata),
+      .write   (b_write),
+      .addr    (b_addr[7:0]),
+      .wdata   (b_wdata),
       .rdata   (sys_rdata),
       .ready   (sys_ready),
       .pin_in  (pin_in),
@@ -97,19 +124,19 @@ module pg_io #(
   wire [32*NUM_WIRES-1:0] w_rdata;
   wire [NUM_WIRES-1:0]    w_ready, w_sel;
   wire [5*NUM_WIRES-1:0]  w_tx_pin, w_clk_pin;
-  wire [NUM_WIRES-1:0]    w_tx_on, w_tx_val, w_tx_oe, w_clk_on, w_clk_val, w_clk_oe, w_rx_avail;
+  wire [NUM_WIRES-1:0]    w_tx_on, w_tx_val, w_tx_oe, w_clk_on, w_clk_val, w_clk_oe, w_rx_avail, w_tx_room;
 
   genvar g;
   generate
     for (g = 0; g < NUM_WIRES; g = g + 1) begin : g_wire
-      assign w_sel[g] = valid && (page == g + 1);
+      assign w_sel[g] = b_valid && (page == g + 1);
       pg_wire #(.FULL(g < NUM_FULL ? 1 : 0), .MRX(g == 1 ? 1 : 0), .FD(g == 0 ? 1 : 0)) u_wire (
           .clk    (clk),
           .rst    (rst),
           .valid  (w_sel[g]),
-          .write  (write),
-          .addr   (addr[7:0]),
-          .wdata  (wdata),
+          .write  (b_write),
+          .addr   (b_addr[7:0]),
+          .wdata  (b_wdata),
           .rdata  (w_rdata[32*g +: 32]),
           .ready  (w_ready[g]),
           .pin_in (pin_in),
@@ -121,38 +148,42 @@ module pg_io #(
           .clk_on (w_clk_on[g]),
           .clk_val(w_clk_val[g]),
           .clk_oe (w_clk_oe[g]),
-          .rx_avail(w_rx_avail[g])
+          .rx_avail(w_rx_avail[g]),
+          .tx_room(w_tx_room[g])
       );
     end
   endgenerate
+
+
 
   // ---------------------------------------------------------------------
   // Blocking timeout
   // ---------------------------------------------------------------------
   reg  [31:0] blk_limit, blk_cnt;
   reg         blk_flag;
-  reg  [8:0]  ev_mask;
-  wire [8:0]  ev_pend   = {cap_ready, {(8-NUM_WIRES){1'b0}}, w_rx_avail} & ev_mask;
-  wire        ev_rd     = sel_blk && !write && addr[3:0] == 4'h8;
-  wire        ev_ready  = !ev_rd || (ev_pend != 9'd0);
+  reg  [10:0] ev_mask;
+  wire [10:0] ev_pend   = {dma_ev, cap_ready, {(8-NUM_WIRES){1'b0}}, w_rx_avail} & ev_mask;
+  wire        ev_rd     = sel_blk && !b_write && b_addr[3:0] == 4'h8;
+  wire        ev_ready  = !ev_rd || (ev_pend != 11'd0);
   wire        slave_ready = sys_ready && (&w_ready) && ev_ready;
-  wire        timed_out   = valid && !slave_ready && (blk_limit != 32'd0) && (blk_cnt >= blk_limit);
+  wire        timed_out   = valid && !dbus_req && !slave_ready && (blk_limit != 32'd0) && (blk_cnt >= blk_limit);
 
-  assign ready = slave_ready || timed_out;
+  // the CPU's access waits while the DMA has the bus
+  assign ready = !dbus_req && (slave_ready || timed_out);
 
   always @(posedge clk) begin
     if (rst) begin
       blk_cnt   <= 32'd0;
       blk_limit <= 32'd0;
       blk_flag  <= 1'b0;
-      ev_mask   <= 9'd0;
+      ev_mask   <= 11'd0;
     end else begin
       blk_cnt <= (valid && !ready) ? blk_cnt + 32'd1 : 32'd0;
       if (timed_out) blk_flag <= 1'b1;
-      if (sel_blk && write) begin
-        if (addr[3:0] == 4'h0) blk_limit <= wdata;
-        if (addr[3:0] == 4'h4 && wdata[0]) blk_flag <= 1'b0;
-        if (addr[3:0] == 4'h8) ev_mask <= wdata[8:0];
+      if (sel_blk && b_write) begin
+        if (b_addr[3:0] == 4'h0) blk_limit <= b_wdata;
+        if (b_addr[3:0] == 4'h4 && b_wdata[0]) blk_flag <= 1'b0;
+        if (b_addr[3:0] == 4'h8) ev_mask <= b_wdata[10:0];
       end
     end
   end
@@ -164,16 +195,44 @@ module pg_io #(
   always @(*) begin
     rdata = 32'd0;
     if (page == 4'd0) begin
-      if (addr[7:4] != 4'hF)       rdata = sys_rdata;
-      else if (addr[3:0] == 4'h0)  rdata = blk_limit;
-      else if (addr[3:0] == 4'h4)  rdata = {31'd0, blk_flag};
-      else if (addr[3:0] == 4'h8)  rdata = {23'd0, ev_pend};
+      if (b_addr[7:4] != 4'hF)       rdata = sys_rdata;
+      else if (b_addr[3:0] == 4'h0)  rdata = blk_limit;
+      else if (b_addr[3:0] == 4'h4)  rdata = {31'd0, blk_flag};
+      else if (b_addr[3:0] == 4'h8)  rdata = {21'd0, ev_pend};
     end
     for (i = 0; i < NUM_WIRES; i = i + 1)
       if (page == i[3:0] + 4'd1) rdata = w_rdata[32*i +: 32];
+    if (page == NUM_WIRES + 1) rdata = dma_rdata;
     if (!slave_ready) rdata = 32'hFFFF_FFFF;
   end
 
+  // ---------------------------------------------------------------------
+  // DMA
+  // ---------------------------------------------------------------------
+  pg_dma #(.NUM_WIRES(NUM_WIRES)) u_dma (
+      .clk       (clk),
+      .rst       (rst),
+      .valid     (sel_dma && !dbus_req),
+      .write     (write),
+      .addr      (addr[7:0]),
+      .wdata     (wdata),
+      .rdata     (dma_rdata),
+      .bus_req   (dbus_req),
+      .bus_write (dbus_write),
+      .bus_addr  (dbus_addr),
+      .bus_wdata (dbus_wdata),
+      .bus_rdata (rdata),
+      .bus_ready (slave_ready),
+      .rx_avail  (w_rx_avail),
+      .tx_room   (w_tx_room),
+      .sram_req  (dma_req),
+      .sram_we   (dma_we),
+      .sram_addr (dma_addr),
+      .sram_wdata(dma_wdata),
+      .sram_gnt  (dma_gnt),
+      .sram_rdata(sram_rdata),
+      .ev        (dma_ev)
+  );
   // ---------------------------------------------------------------------
   // Pinmux (pins 0..7 = uio, 8..13 = uo[0..5]); engine 0 wins
   // ---------------------------------------------------------------------

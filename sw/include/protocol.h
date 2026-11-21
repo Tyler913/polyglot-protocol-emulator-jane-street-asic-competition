@@ -173,6 +173,7 @@ static inline int block_timed_out(void)
  * n has received data, EV_CAPTURE = an edge was captured. */
 #define EV_WIRE(n)  (1u << (n))
 #define EV_CAPTURE  (1u << 8)
+#define EV_DMA(k)   (1u << (9 + (k)))   /* DMA channel k (IO -> SRAM) has words */
 
 static inline uint32_t wait_events(uint32_t mask)
 {
@@ -241,6 +242,122 @@ typedef struct {
  * CRC, TX attributes or auto-reply (USB, 10BASE-T and CAN need W0 or W1). */
 #define W2 ((pg_wire_t *)0x80000300u)
 #define W3 ((pg_wire_t *)0x80000400u)
+
+/* ---- DMA: SRAM ring buffers <-> IO registers ---------------------------------
+ * Two channels. Each moves 32-bit words between a ring in SRAM and one IO
+ * register: a Wire Engine's RX or TX register, GPIO_IN, GPIO_OUT, ... A word
+ * moves when its pace allows: DMA_PACE_RX (the engine has received data),
+ * DMA_PACE_TX (its TX FIFO has room), DMA_PACE_TIMER (every PERIOD cycles,
+ * exactly), DMA_PACE_FREE. The ring is [START, END); the DMA owns HEAD, C owns
+ * TAIL. IO -> SRAM: words from TAIL to HEAD are C's to read; the DMA stops one
+ * word before TAIL. SRAM -> IO: C writes words from TAIL on and advances TAIL;
+ * the DMA sends while HEAD != TAIL. A word the DMA moves takes one cycle of the
+ * IO bus (the CPU's access waits) and one SRAM cycle. Event EV_DMA(k).
+ */
+typedef struct {
+    volatile uint32_t CTRL;
+    volatile uint32_t REG;      /* IO register offset (pointer & 0xFFF) */
+    volatile uint32_t START;    /* ring, byte addresses in SRAM */
+    volatile uint32_t END;
+    volatile uint32_t HEAD;
+    volatile uint32_t TAIL;
+    volatile uint32_t PERIOD;   /* timer pace, cycles */
+    volatile uint32_t STATUS;
+} pg_dma_t;
+
+#define DMA0 ((pg_dma_t *)0x80000500u)
+#define DMA1 ((pg_dma_t *)0x80000520u)
+#define DMA_EN          1u
+#define DMA_TO_IO       2u
+#define DMA_PACE_TIMER  (0u << 2)
+#define DMA_PACE_RX     (1u << 2)
+#define DMA_PACE_TX     (2u << 2)
+#define DMA_PACE_FREE   (3u << 2)
+#define DMA_ENGINE(n)   (((uint32_t)(n) & 3u) << 4)
+#define DMA_MISSED      1u      /* STATUS: a timer tick found the channel not ready */
+#define DMA_BUSY        2u
+#define DMA_EMPTY       4u
+#define DMA_FULL        8u
+#define DMA_REG_OF(p)   ((uint32_t)(uintptr_t)(p) & 0xFFFu)
+#define DMA_ENGINE_OF(w) ((((uint32_t)(uintptr_t)(w) >> 8) - 1u) & 3u)
+
+/* Start a channel: ring = buf[0..n), register reg, ctrl = DMA_TO_IO? | pace | engine */
+static inline void dma_start(pg_dma_t *d, uint32_t ctrl, volatile uint32_t *reg, uint32_t *buf, uint32_t n,
+                             uint32_t period)
+{
+    uint32_t a = (uint32_t)(uintptr_t)buf;
+    d->CTRL   = 0;
+    d->REG    = DMA_REG_OF(reg);
+    d->START  = a;
+    d->END    = a + 4u * n;
+    d->HEAD   = a;
+    d->TAIL   = a;
+    d->PERIOD = period;
+    d->STATUS = DMA_MISSED;
+    d->CTRL   = ctrl | DMA_EN;
+}
+
+static inline void dma_stop(pg_dma_t *d) { d->CTRL = 0; }
+
+/* Receive every word of engine w into the ring buf[0..n) */
+static inline void dma_rx(pg_dma_t *d, pg_wire_t *w, uint32_t *buf, uint32_t n)
+{
+    dma_start(d, DMA_PACE_RX | DMA_ENGINE(DMA_ENGINE_OF(w)), &w->RX, buf, n, 1);
+}
+
+/* Words waiting in an IO -> SRAM ring */
+static inline uint32_t dma_count(pg_dma_t *d)
+{
+    uint32_t h = d->HEAD, t = d->TAIL;
+    return (h >= t ? h - t : h + (d->END - d->START) - t) >> 2;
+}
+
+/* Next word of an IO -> SRAM ring (call only if dma_count() > 0) */
+static inline uint32_t dma_get(pg_dma_t *d)
+{
+    uint32_t t = d->TAIL, x = *(volatile uint32_t *)(uintptr_t)t;
+    t += 4u;
+    if (t == d->END) t = d->START;
+    d->TAIL = t;
+    return x;
+}
+
+/* Send words through engine w's TX register (CTRL.LEN bits each) from the ring buf[0..n) */
+static inline void dma_tx(pg_dma_t *d, pg_wire_t *w, uint32_t *buf, uint32_t n)
+{
+    dma_start(d, DMA_TO_IO | DMA_PACE_TX | DMA_ENGINE(DMA_ENGINE_OF(w)), &w->TX, buf, n, 1);
+}
+
+/* Room in an SRAM -> IO ring */
+static inline uint32_t dma_room(pg_dma_t *d)
+{
+    uint32_t h = d->HEAD, t = d->TAIL;
+    return ((h > t ? h - t : h + (d->END - d->START) - t) >> 2) - 1u;
+}
+
+/* Append a word to an SRAM -> IO ring (call only if dma_room() > 0) */
+static inline void dma_put(pg_dma_t *d, uint32_t x)
+{
+    uint32_t t = d->TAIL;
+    *(volatile uint32_t *)(uintptr_t)t = x;
+    t += 4u;
+    if (t == d->END) t = d->START;
+    d->TAIL = t;
+}
+
+/* Logic analyzer: sample GPIO_IN every period cycles into buf[0..n), n - 1 samples, then stop */
+static inline void dma_capture(pg_dma_t *d, uint32_t *buf, uint32_t n, uint32_t period)
+{
+    dma_start(d, DMA_PACE_TIMER, &PG_GPIO_IN, buf, n, period);
+}
+
+/* Pattern generator: write buf[0..count) to GPIO_OUT, one word every period cycles */
+static inline void dma_pattern(pg_dma_t *d, uint32_t *buf, uint32_t n, uint32_t count, uint32_t period)
+{
+    dma_start(d, DMA_TO_IO | DMA_PACE_TIMER, &PG_GPIO_OUT, buf, n, period);
+    d->TAIL = (uint32_t)(uintptr_t)(buf + count);    /* count < n words queued */
+}
+
 
 /* CTRL bits */
 #define WIRE_EN          (1u << 0)
@@ -1384,12 +1501,17 @@ static inline uint32_t canfd_field(const uint32_t *a, uint32_t pos, uint32_t n)
 /* Receive one frame, classic or FD (blocks; the unit has already ACKed it if
  * good). Returns 0, or -1 if the frame was too short. The 20-bit RX words are
  * packed into 32-bit words as they arrive (no division: RV32EC). */
-static inline int canfd_recv(pg_wire_t *w, canfd_frame_t *f)
+static inline int canfd__recv(pg_wire_t *w, pg_dma_t *d, canfd_frame_t *f)
 {
     uint32_t a[22], nb = 0, nw = 0, x, st;
     for (uint32_t i = 0; i < 22u; i++) a[i] = 0;
     for (;;) {                                        /* destuffed bits, MSB first, 20 per word */
-        x = wire_get(w);
+        if (d) {
+            while (!dma_count(d)) { }
+            x = dma_get(d);
+        } else {
+            x = wire_get(w);
+        }
         if (WIRE_IS_END(x)) break;
         nw++;
         uint32_t k = nb >> 5, s = nb & 31u;           /* append 20 bits MSB first */
@@ -1427,6 +1549,14 @@ static inline int canfd_recv(pg_wire_t *w, canfd_frame_t *f)
     f->acked = (uint8_t)!canfd_field(a, end + 1u, 1);    /* ACK slot */
     return 0;
 }
+
+static inline int canfd_recv(pg_wire_t *w, canfd_frame_t *f) { return canfd__recv(w, 0, f); }
+
+/* The same from a DMA ring that receives W0's words (canfd_rx_dma): frames
+ * arriving back to back are kept while C works on an earlier one. */
+static inline int canfd_recv_dma(pg_dma_t *d, canfd_frame_t *f) { return canfd__recv(0, d, f); }
+
+static inline void canfd_rx_dma(pg_dma_t *d, pg_wire_t *w, uint32_t *ring, uint32_t n) { dma_rx(d, w, ring, n); }
 
 /* ---- S/PDIF and AES3 (IEC 60958 / AES3 line format) ------------------------
  * Biphase mark (WIRE_BIPHASE) on a full engine: one slot = 1/(64 fs). A

@@ -110,6 +110,7 @@ The example runs on a lite engine: it switches a debug port from JTAG to SWD, re
 | A line-code violation (sync, preamble) inside a coded stream | a `WIRE_A_RAW` word (with `WIRE_A_FAST` for half-bit steps) |
 | Pulse widths, odd timing, anything else | timed GPIO (`pin_out_at`, `pins_out_at`, `pin_oe_at`) and edge capture |
 | Several protocols at once | one engine each; `wait_events()` sleeps until any of them has data |
+| More data than a 4-word FIFO holds while C is busy, or bits on exact cycles from a table | a DMA channel: `dma_rx` / `dma_tx` on an engine, `dma_capture` / `dma_pattern` on the GPIO registers |
 
 ### Several protocols in one program
 
@@ -152,6 +153,7 @@ The program, its data and a 256-byte stack share 3.5 KB (the top 256 bytes are t
 | MIPI I3C SDR | `i3c_init`, `i3c_start`, `i3c_stop`, `i3c_header`, `i3c_write`, `i3c_read`, `i3c_ccc`, `i3c_read_msg` |
 | Second bit rate, biphase | `w->DIV2`, `WIRE_DIV2_FIX8`, `w->PHASE`, `WIRE_PHASE`, `WIRE_A_FAST`, `WIRE_A_PP`, `WIRE_A_RAW`, `WIRE_RSW_SP`, `WIRE_BIPHASE`, `WIRE_BIPHASE_DM` |
 | SWD, JTAG | `WIRE_SWD`, `swd_connect`, `swd_xfer`, `SWD_REQ`; `WIRE_JTAG`, `jtag_tms`, `jtag_shift`, `JTAG_*` TMS sequences |
+| DMA | `DMA0`, `DMA1`, `dma_start`, `dma_rx`, `dma_count`, `dma_get`, `dma_tx`, `dma_room`, `dma_put`, `dma_capture` (logic analyzer), `dma_pattern` (pattern generator), `canfd_rx_dma` / `canfd_recv_dma`, `EV_DMA(k)` |
 | Several protocols at once | `pt.h`: `PT_BEGIN`, `PT_WAIT`, `PT_YIELD`, `PT_END` (cooperative tasks); `job.h`: queue jobs (`JOB_ENTRY`, slots, mailbox) |
 
 The register-level description of every block is in the header comments of `src/pg_sysio.v`, `src/pg_io.v` and `src/pg_wire.v`.

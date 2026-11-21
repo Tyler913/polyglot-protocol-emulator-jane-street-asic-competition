@@ -17,6 +17,9 @@
  *     SRAM cycles, and a busy CPU could hold it off for longer than one SPI
  *     byte: the host port then dropped the byte (found by the job-queue test).
  *
+ * The DMA (pg_dma) has a word port with the same priority scheme as the host,
+ * after it: a CPU SRAM read that meets a DMA access waits one cycle.
+ *
  * SRAM writes happen in the AHB data phase. If a read address phase arrives
  * in the same cycle, the fabric stalls one cycle (the single SRAM port can
  * only do one access per cycle).
@@ -60,7 +63,16 @@ module pg_ahb (
     input  wire [15:0] host_addr,
     input  wire [7:0]  host_wdata,
     output wire        host_ack,
-    output reg  [7:0]  host_rdata
+    output reg  [7:0]  host_rdata,
+
+    // DMA word port (pg_dma): the access happens in a cycle with dma_req &&
+    // dma_gnt, after a data-phase CPU write and the host; read data on
+    // sram_rdata in the next cycle
+    input  wire        dma_req,
+    input  wire        dma_we,
+    input  wire [9:0]  dma_addr,
+    input  wire [31:0] dma_wdata,
+    output wire        dma_gnt
 );
 
   // ---------------------------------------------------------------------
@@ -88,12 +100,15 @@ module pg_ahb (
   // data-phase CPU write needs the port this cycle.
   reg  host_busy;     // host access issued last cycle; ack now
   wire host_go = host_req && !host_busy && (cpu_halted || !wr_now);
+  // DMA word access: like the host, after it
+  wire dma_go  = dma_req && !host_go && (cpu_halted || !wr_now);
+  assign dma_gnt = dma_go;
 
   // Stall when the pending write and a new SRAM read compete for the port,
   // when the host takes the port from a new SRAM read, or when the register
   // slave is not ready.
   wire stall_sram = wr_now && ap_sram_read;
-  wire stall_host = !cpu_halted && host_go && ap_sram_read;
+  wire stall_host = !cpu_halted && (host_go || dma_go) && ap_sram_read;
   wire stall_io   = dp_io && !io_done;
   assign hready   = !stall_sram && !stall_host && !stall_io;
 
@@ -169,6 +184,12 @@ module pg_ahb (
       sram_wdata = {4{host_wdata}};
       sram_wmask = {{8{host_addr[1:0] == 2'd3}}, {8{host_addr[1:0] == 2'd2}},
                     {8{host_addr[1:0] == 2'd1}}, {8{host_addr[1:0] == 2'd0}}};
+    end else if (dma_go) begin
+      sram_en    = 1'b1;
+      sram_we    = dma_we;
+      sram_addr  = dma_addr;
+      sram_wdata = dma_wdata;
+      sram_wmask = 32'hFFFF_FFFF;
     end else if (!cpu_halted && ap_sram_read && hready) begin
       sram_en    = 1'b1;
       sram_addr  = haddr[11:2];

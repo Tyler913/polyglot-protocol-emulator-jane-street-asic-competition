@@ -125,3 +125,38 @@ async def test_canfd_receive_500k_2m(dut):
 @cocotb.test()
 async def test_canfd_receive_1m_5m(dut):
     await chip_receives(dut, 1_000_000, 5_000_000)
+
+
+@cocotb.test()
+async def test_canfd_receive_back_to_back_dma(dut):
+    """Frames back to back (3-bit intermission) at 1 + 5 Mbit/s, received
+    through a DMA ring while C spends 100 us on other work after each frame:
+    the 4-word RX FIFO alone would overflow (checked by the same test without
+    the DMA, which loses frames)."""
+    host = await start(dut)
+    nominal, data = 1_000_000, 5_000_000
+    tn, td = F_CPU / nominal, F_CPU / data
+    bus = CanBus(dut, txd_uio=0, rxd_ui=2, bit_cycles=tn)
+    node = bus.add(CanFdNode(bus, "node", round(tn), round(td), 0.75, 0.7))
+    bus.start()
+    frames = []
+    for k in range(4):
+        frames.append(dict(fid=0x100 + k, data=DATA[k:] + DATA[:k]))
+        frames.append(dict(fid=0x200 + k, data=[]))
+        frames.append(dict(fid=0x300 + k, data=[k] * 3, fd=False, brs=False))
+    await load(host, "canfd_rx", [12, nominal, data, 1, 100])
+    await host.ctrl(0x01)
+    await wait_irq(dut, 1, timeout=10_000)
+    node.send_all(frames)
+    await wait_irq(dut, 0, timeout=400_000)
+    bus.stop()
+    res = await read_shared(host, 0, 3 + 4 * 12)
+    assert not node.errors, node.errors[:5]
+    assert [f["acked"] for f in node.frames] == [True] * 12, [f["acked"] for f in node.frames]
+    assert res[0] == 0x600D00FE and res[1] == 12, f"done {res[0]:#x}, {res[1]} frames"
+    for k, f in enumerate(frames):
+        r = res[3 + 4 * k: 7 + 4 * k]
+        d = f["data"]
+        fd = f.get("fd", True)
+        assert r[0] == f["fid"], f"frame {k}: id {r[0]:#x}"
+        assert r[1] == len(d) | (fd << 8) | (fd << 9) | (1 << 10), f"frame {k}: {r[1]:#x}"

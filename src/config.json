@@ -24,6 +24,16 @@
   "//": "Polyglot: 68 (std-cell utilization about 54 % with four Wire Engines, 64 % with six); global routing has no overflow.",
   "PL_TARGET_DENSITY_PCT": 68,
 
+  "//": "Polyglot: timing-driven global placement. With the DMA added (598k um^2 of cells) the",
+  "//": "default (off) left +0.27 ns of setup slack at the slow corner; on: +3.22 ns (P&R, 2026-11-21).",
+  "PL_TIMING_DRIVEN": true,
+
+  "//": "Polyglot: more antenna repair iterations and margin (one violation was left with 3 / 10 %).",
+  "GRT_ANTENNA_REPAIR_ITERS": 10,
+  "GRT_ANTENNA_REPAIR_MARGIN": 25,
+  "DRT_ANTENNA_REPAIR_ITERS": 10,
+  "DRT_ANTENNA_REPAIR_MARGIN": 25,
+
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
   "CLOCK_PERIOD": 20,

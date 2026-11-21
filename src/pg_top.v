@@ -171,6 +171,9 @@ module tt_um_tyler913_polyglot (
   wire        reg_valid, reg_write, reg_ready;
   wire [11:0] reg_addr;
   wire [31:0] reg_wdata, reg_rdata;
+  wire        dma_req, dma_we, dma_gnt;
+  wire [9:0]  dma_addr;
+  wire [31:0] dma_wdata;
 
   pg_ahb u_ahb (
       .clk       (clk),
@@ -200,7 +203,12 @@ module tt_um_tyler913_polyglot (
       .host_addr (host_addr),
       .host_wdata(host_wdata),
       .host_ack  (host_ack),
-      .host_rdata(host_rdata)
+      .host_rdata(host_rdata),
+      .dma_req   (dma_req),
+      .dma_we    (dma_we),
+      .dma_addr  (dma_addr),
+      .dma_wdata (dma_wdata),
+      .dma_gnt   (dma_gnt)
   );
 
   pg_sram u_sram (
@@ -230,7 +238,13 @@ module tt_um_tyler913_polyglot (
       .uo_out (proto_uo),
       .host_irq(host_irq),
       .uio_in (uio_in),
-      .ui_in  (ui_in[4:0])
+      .ui_in  (ui_in[4:0]),
+      .dma_req  (dma_req),
+      .dma_we   (dma_we),
+      .dma_addr (dma_addr),
+      .dma_wdata(dma_wdata),
+      .dma_gnt  (dma_gnt),
+      .sram_rdata(sram_rdata)
   );
 
   assign uo_out = {host_miso, host_irq, proto_uo};

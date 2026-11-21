@@ -25,6 +25,7 @@ project:
     - "pg_sysio.v"
     - "pg_wire.v"
     - "pg_fifo.v"
+    - "pg_dma.v"
     - "hazard3_alu.v"
     - "hazard3_branchcmp.v"
     - "hazard3_core.v"

@@ -97,6 +97,9 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for progr
 | CAN + SPI + UART + I2C as four cooperative C tasks | `mixed4` (3360 B) | `test_mixed` |
 | A USB keyboard that types what arrives on its UART | `usb_hid` | `test_usb_hid` |
 | Eight protocol jobs, four at a time, loaded while the others run | `queue` + `sw/jobs/` | `test_queue` |
+| UART at 1 Mbaud received and sent by DMA while the CPU does not touch the engine (120 bytes back to back each way) | `dma` (test) | `test_dma` |
+| Logic analyzer (all inputs every 10 cycles) and pattern generator (uo pins every 25 cycles, exact) at the same time, by DMA | `dma` (test) | `test_dma` |
+| CAN FD frames back to back at 1 + 5 Mbit/s into a DMA ring while C works 100 us per frame | `canfd_rx` (test) | `test_canfd` (the same test without DMA loses frames) |
 
 ## Clock rates
 
