@@ -10,17 +10,19 @@
 
 `default_nettype none
 
-module pg_sram (
+module pg_sram #(
+    parameter AW = 11
+) (
     input  wire        clk,
     input  wire        en,
     input  wire        we,
-    input  wire [9:0]  addr,
+    input  wire [AW-1:0] addr,
     input  wire [31:0] wdata,
     input  wire [31:0] wmask,
     output reg  [31:0] rdata
 );
 
-  (* ram_style = "block" *) reg [31:0] mem [0:1023];
+  (* ram_style = "block" *) reg [31:0] mem [0:(1<<AW)-1];
   integer i;
 
   always @(posedge clk) begin

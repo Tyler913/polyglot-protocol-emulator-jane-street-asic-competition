@@ -69,7 +69,7 @@
 
 /* Last 256 bytes of SRAM: shared with the host (parameters in, results out).
  * The stack starts below it. */
-#define PG_SHARED   ((volatile uint32_t *)0x00000F00u)
+#define PG_SHARED   ((volatile uint32_t *)0x00001F00u)
 
 /* ---- Time ---------------------------------------------------------------- */
 

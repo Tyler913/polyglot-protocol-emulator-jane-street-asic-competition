@@ -66,7 +66,7 @@ module pg_dma #(
     // read data comes the cycle after
     output wire        sram_req,
     output wire        sram_we,
-    output wire [9:0]  sram_addr,
+    output wire [10:0] sram_addr,
     output wire [31:0] sram_wdata,
     input  wire        sram_gnt,
     input  wire [31:0] sram_rdata,
@@ -77,10 +77,10 @@ module pg_dma #(
 
   reg  [5:0]  ctrl   [0:1];
   reg  [11:0] ioreg  [0:1];
-  reg  [9:0]  start  [0:1];
-  reg  [9:0]  rend   [0:1];
-  reg  [9:0]  head   [0:1];
-  reg  [9:0]  tail   [0:1];
+  reg  [10:0] start  [0:1];   // SRAM word addresses (8 KB)
+  reg  [10:0] rend   [0:1];
+  reg  [10:0] head   [0:1];
+  reg  [10:0] tail   [0:1];
   reg  [15:0] period [0:1];
   reg  [15:0] tmr    [0:1];
   reg  [31:0] buf_d  [0:1];
@@ -89,7 +89,7 @@ module pg_dma #(
   reg         missed [0:1];
 
   wire [1:0] want_bus, want_sram, bus_done, sram_done, tick, idle_end;
-  wire [9:0] nxt [0:1];
+  wire [10:0] nxt [0:1];
 
   genvar k;
   generate
@@ -100,7 +100,7 @@ module pg_dma #(
       wire [1:0]  eng   = ctrl[k][5:4];
       wire        ptick = (tmr[k] == 16'd0);
       wire        epace = (pace == 2'd1) ? rx_avail[eng] : (pace == 2'd2) ? tx_room[eng] : 1'b1;
-      assign nxt[k]  = (head[k] + 10'd1 == rend[k]) ? start[k] : head[k] + 10'd1;
+      assign nxt[k]  = (head[k] + 11'd1 == rend[k]) ? start[k] : head[k] + 11'd1;
       wire        full  = (nxt[k] == tail[k]);
       wire        empty = (head[k] == tail[k]);
       assign tick[k] = en && pace == 2'd0 && ptick;
@@ -142,10 +142,10 @@ module pg_dma #(
       if (rst) begin
         ctrl[c]   <= 6'd0;
         ioreg[c]  <= 12'd0;
-        start[c]  <= 10'd0;
-        rend[c]   <= 10'd0;
-        head[c]   <= 10'd0;
-        tail[c]   <= 10'd0;
+        start[c]  <= 11'd0;
+        rend[c]   <= 11'd0;
+        head[c]   <= 11'd0;
+        tail[c]   <= 11'd0;
         period[c] <= 16'd1;
         tmr[c]    <= 16'd0;
         buf_d[c]  <= 32'd0;
@@ -187,10 +187,10 @@ module pg_dma #(
           case (ra)
             3'd0: ctrl[c]   <= wdata[5:0];
             3'd1: ioreg[c]  <= wdata[11:0];
-            3'd2: start[c]  <= wdata[11:2];
-            3'd3: rend[c]   <= wdata[11:2];
-            3'd4: head[c]   <= wdata[11:2];
-            3'd5: tail[c]   <= wdata[11:2];
+            3'd2: start[c]  <= wdata[12:2];
+            3'd3: rend[c]   <= wdata[12:2];
+            3'd4: head[c]   <= wdata[12:2];
+            3'd5: tail[c]   <= wdata[12:2];
             3'd6: period[c] <= (wdata[15:0] == 16'd0) ? 16'd1 : wdata[15:0];
             3'd7: if (wdata[0]) missed[c] <= 1'b0;
             default: ;
@@ -204,10 +204,10 @@ module pg_dma #(
     case (ra)
       3'd0:    rdata = {26'd0, ctrl[ch]};
       3'd1:    rdata = {20'd0, ioreg[ch]};
-      3'd2:    rdata = {20'd0, start[ch], 2'b00};
-      3'd3:    rdata = {20'd0, rend[ch], 2'b00};
-      3'd4:    rdata = {20'd0, head[ch], 2'b00};
-      3'd5:    rdata = {20'd0, tail[ch], 2'b00};
+      3'd2:    rdata = {19'd0, start[ch], 2'b00};
+      3'd3:    rdata = {19'd0, rend[ch], 2'b00};
+      3'd4:    rdata = {19'd0, head[ch], 2'b00};
+      3'd5:    rdata = {19'd0, tail[ch], 2'b00};
       3'd6:    rdata = {16'd0, period[ch]};
       default: rdata = {28'd0, nxt[ch] == tail[ch], head[ch] == tail[ch], st[ch] != 2'd0, missed[ch]};
     endcase

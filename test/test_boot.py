@@ -8,7 +8,7 @@ from cocotb.triggers import ClockCycles, RisingEdge
 
 from lib.host import HostSpi
 from lib.pins import bit
-from lib.soc import build_firmware, start
+from lib.soc import SHARED, build_firmware, start
 
 
 async def reset(dut):
@@ -34,11 +34,11 @@ async def test_memtest(dut):
     await reset(dut)
     host = HostSpi(dut)
     await host.write(0x0000, image)
-    await host.write(0x0F00, bytes(8))  # clear the result words
+    await host.write(SHARED, bytes(8))  # clear the result words
     await host.ctrl(0x01)
     await ClockCycles(dut.clk, 6000)
     await host.ctrl(0x00)  # halt, then read the result
-    res = await host.read(0x0F00, 8)
+    res = await host.read(SHARED, 8)
     marker = int.from_bytes(res[0:4], "little")
     errors = int.from_bytes(res[4:8], "little")
     assert marker == 0x600D0000, f"memtest marker {marker:#010x}, errors {errors}"
@@ -87,15 +87,15 @@ async def test_host_while_busy(dut):
     await reset(dut)
     host = HostSpi(dut)
     await host.write(0x0000, image)
-    await host.write(0x0F00, bytes(4))
+    await host.write(SHARED, bytes(4))
     await host.ctrl(0x01)
     await ClockCycles(dut.clk, 500)
     pattern = bytes((i * 73 + 5) & 0xFF for i in range(256))
     await host.write(0x0800, pattern)
     back = await host.read(0x0800, len(pattern))
-    n1 = int.from_bytes(await host.read(0x0F00, 4), "little")
+    n1 = int.from_bytes(await host.read(SHARED, 4), "little")
     await ClockCycles(dut.clk, 200)
-    n2 = int.from_bytes(await host.read(0x0F00, 4), "little")
+    n2 = int.from_bytes(await host.read(SHARED, 4), "little")
     bad = [i for i in range(256) if back[i] != pattern[i]]
     assert not bad, f"{len(bad)} bytes wrong, first at 0x{0x800 + bad[0]:x}"
     assert n2 > n1 > 0, f"CPU loop counter {n1} -> {n2}: the CPU must keep running"

@@ -125,9 +125,9 @@ More protocols than fit in memory at once can run as a queue (`sw/tests/queue`, 
 
 Job sizes: UART echo 208 bytes, WS2812 454, SPI RAM 694, CAN send/receive 784, I2C EEPROM write/poll/read 1122. To fit, the host passes bit periods already computed (`can_init_fix8`, `WIRE_UART_8N1_FIX8`) so no divide routine is linked into each job, and each job points `gp` at its own data, which makes most static-variable accesses one instruction.
 
-### Fitting in 4 KB
+### Fitting in 8 KB
 
-The program, its data and a 256-byte stack share 3.5 KB (the top 256 bytes are the host mailbox). Measured sizes (code + data, GCC 15 `-Os`): UART echo 485 B, SPI RAM 674 B, I2C EEPROM 954 B, CAN 734 B, USB HID keyboard 1.9 KB, and all of CAN + SPI + UART + I2C as concurrent tasks 3.5 KB. The core has no multiply/divide unit, so avoid 64-bit arithmetic at run time: one 64-bit division pulls about 1.4 KB of libgcc into the image. `protocol.h` keeps its own helpers 32-bit.
+The program, its data and a 256-byte stack share about 7.5 KB (the top 256 bytes are the host mailbox; until 2026-11-22 the chip had 4 KB, and every program here was written to fit 3.5 KB). Measured sizes (code + data, GCC 15 `-Os`): UART echo 485 B, SPI RAM 674 B, I2C EEPROM 954 B, CAN 734 B, USB HID keyboard 1.9 KB, and all of CAN + SPI + UART + I2C as concurrent tasks 3.5 KB. The core has no multiply/divide unit, so avoid 64-bit arithmetic at run time: one 64-bit division pulls about 1.4 KB of libgcc into the image. `protocol.h` keeps its own helpers 32-bit.
 
 ## 6. Reference (protocol.h)
 

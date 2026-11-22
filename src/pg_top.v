@@ -19,7 +19,7 @@
  *   uio[7:0]  bidirectional protocol pins (pins 0..7)
  *
  * CPU memory map
- *   0x0000_0000 - 0x0000_0FFF  SRAM, 4 KB (code + data)
+ *   0x0000_0000 - 0x0000_1FFF  SRAM, 8 KB (code + data; the last 256 bytes are the host mailbox)
  *   0x8000_0000 - 0x8000_00FF  system registers, timed GPIO (pg_sysio, pg_io)
  *   0x8000_0100 + 0x100*n      Wire Engine n (pg_wire)
  *
@@ -101,8 +101,8 @@ module tt_um_tyler913_polyglot (
       .EXTENSION_C        (1),
       .EXTENSION_E        (1),
       .EXTENSION_M        (0),
-      .CSR_M_MANDATORY    (1),
-      .CSR_M_TRAP         (1),
+      .CSR_M_MANDATORY    (0),     // no CSRs: the firmware uses none (saves ~15k um^2)
+      .CSR_M_TRAP         (0),
       .CSR_COUNTER        (0),
       .DEBUG_SUPPORT      (0),
       .PMP_REGIONS        (0),
@@ -166,13 +166,13 @@ module tt_um_tyler913_polyglot (
   // Bus fabric, SRAM, I/O (system registers, timed GPIO, wire engines)
   // ---------------------------------------------------------------------
   wire        sram_en, sram_we;
-  wire [9:0]  sram_addr;
+  wire [10:0] sram_addr;
   wire [31:0] sram_wdata, sram_wmask, sram_rdata;
   wire        reg_valid, reg_write, reg_ready;
   wire [11:0] reg_addr;
   wire [31:0] reg_wdata, reg_rdata;
   wire        dma_req, dma_we, dma_gnt;
-  wire [9:0]  dma_addr;
+  wire [10:0] dma_addr;
   wire [31:0] dma_wdata;
 
   pg_ahb u_ahb (

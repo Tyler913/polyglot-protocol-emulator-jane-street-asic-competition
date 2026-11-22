@@ -26,7 +26,10 @@
 #define CK  W3
 #define IO  W2
 #define ETU (372u * 50u)                       /* cycles: 372 card clocks of 50 cycles */
-#define FMT SER_FMT(8, SER_EVEN, 2, 0)
+#define FMT SER_FMT(8, SER_EVEN, 2, 0)         /* sent: 12 etu with the guard time */
+#define FMT_RX SER_FMT(8, SER_EVEN, 1, 0)      /* received: 11 bits; the second stop bit is guard
+                                                  time, and a card may start its answer right after
+                                                  it, so RX must not wait for it */
 
 static uint32_t perr;
 
@@ -49,7 +52,7 @@ static int io_get(uint32_t timeout)
         clk_feed();
         if (now() - t > timeout) return -1;
     }
-    int c = ser_decode(FMT, wire_get(IO));
+    int c = ser_decode(FMT_RX, wire_get(IO));
     if (c < 0) perr++;
     return c & 0xFF;
 }
@@ -68,7 +71,7 @@ int main(void)
     pin_write(PIN_UO(1), 0);                   /* RST low */
     wire_config(CK, (wire_cfg_t){ WIRE_EN | WIRE_TX | WIRE_LEN(32), 25u, WIRE_PINS(PIN_UO(0), 0, 0), 0u });
     wire_config(IO, (wire_cfg_t){ WIRE_EN | WIRE_TX | WIRE_RX | WIRE_RX_ASYNC | WIRE_IDLE_HIGH |
-                                  WIRE_OE_OPEN_DRAIN | WIRE_LEN(ser_bits(FMT)),
+                                  WIRE_OE_OPEN_DRAIN | WIRE_LEN(ser_bits(FMT_RX)),
                                   ETU, WIRE_PINS(PIN_UIO(2), PIN_UIO(2), 0), WIRE_RESYNC });
     host_irq(1);                               /* ready */
     clk_feed();

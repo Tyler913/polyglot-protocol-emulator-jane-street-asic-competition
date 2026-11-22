@@ -31,7 +31,7 @@ VERILOG_SOURCES += $(wildcard $(PDK_LIBS_REF)/$(PDK_CELL_PREFIX)_stdcell/verilog
 VERILOG_SOURCES += $(PDK_LIBS_REF)/$(PDK_CELL_PREFIX)_stdcell/verilog/$(PDK_CELL_PREFIX)_stdcell.v
 # SRAM macro model (functional, -DFUNCTIONAL above)
 VERILOG_SOURCES += $(PDK_LIBS_REF)/$(PDK_CELL_PREFIX)_sram/verilog/RM_IHPSG13_1P_core_behavioral_bm_bist.v
-VERILOG_SOURCES += $(PDK_LIBS_REF)/$(PDK_CELL_PREFIX)_sram/verilog/RM_IHPSG13_1P_1024x32_c2_bm_bist.v
+VERILOG_SOURCES += $(PDK_LIBS_REF)/$(PDK_CELL_PREFIX)_sram/verilog/RM_IHPSG13_1P_1024x64_c2_bm_bist.v
 
 # this gets copied in by the GDS action workflow
 VERILOG_SOURCES += $(PWD)/gate_level_netlist.v

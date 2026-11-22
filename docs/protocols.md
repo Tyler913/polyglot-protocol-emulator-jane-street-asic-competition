@@ -4,7 +4,7 @@ Every protocol below is a C program in `sw/examples/` or `sw/tests/` (stock GCC,
 
 Any asynchronous serial format (5 to 9 data bits, parity, 1 or 2 stop bits, inverted line) is a `ser_*` setting in C, since the engine shifts whole frames.
 
-Size = code + initialized data in bytes (GCC 15, `-Os`), out of 3.5 KB for program, data and stack. "Engine" means a Wire Engine; "timed GPIO" means the queue that changes pins on exact cycles; "capture" means the edge-timestamp unit.
+Size = code + initialized data in bytes (GCC 15, `-Os`), out of about 7.5 KB for program, data and stack (8 KB SRAM; the sizes were measured when it was 4 KB, so every program also fits the old 3.5 KB). "Engine" means a Wire Engine; "timed GPIO" means the queue that changes pins on exact cycles; "capture" means the edge-timestamp unit.
 
 ## Standard serial buses
 

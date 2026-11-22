@@ -19,7 +19,7 @@ SW_DIR = Path(__file__).resolve().parents[2] / "sw"
 PREBUILT_DIR = Path(__file__).resolve().parents[1] / "firmware"
 CLK_NS = 20  # 50 MHz
 F_CPU = 50_000_000
-SHARED = 0x0F00  # PG_SHARED in protocol.h
+SHARED = 0x1F00  # PG_SHARED in protocol.h (last 256 bytes of the 8 KB SRAM)
 HOST_IRQ = 6  # uo[6]
 
 
