@@ -44,7 +44,7 @@ module pg_ahb (
     // SRAM port
     output reg         sram_en,
     output reg         sram_we,
-    output reg  [10:0] sram_addr,
+    output reg  [11:0] sram_addr,
     output reg  [31:0] sram_wdata,
     output reg  [31:0] sram_wmask,
     input  wire [31:0] sram_rdata,
@@ -70,7 +70,7 @@ module pg_ahb (
     // sram_rdata in the next cycle
     input  wire        dma_req,
     input  wire        dma_we,
-    input  wire [10:0] dma_addr,
+    input  wire [11:0] dma_addr,
     input  wire [31:0] dma_wdata,
     output wire        dma_gnt
 );
@@ -181,19 +181,19 @@ module pg_ahb (
   always @(*) begin
     sram_en    = 1'b0;
     sram_we    = 1'b0;
-    sram_addr  = 11'd0;
+    sram_addr  = 12'd0;
     sram_wdata = 32'd0;
     sram_wmask = 32'd0;
     if (!cpu_halted && wr_now) begin
       sram_en    = 1'b1;
       sram_we    = 1'b1;
-      sram_addr  = dp_addr[12:2];
+      sram_addr  = dp_addr[13:2];
       sram_wdata = hwdata;
       sram_wmask = {{8{dp_strb[3]}}, {8{dp_strb[2]}}, {8{dp_strb[1]}}, {8{dp_strb[0]}}};
     end else if (host_go) begin
       sram_en    = 1'b1;
       sram_we    = host_we;
-      sram_addr  = host_addr[12:2];
+      sram_addr  = host_addr[13:2];
       sram_wdata = {4{host_wdata}};
       sram_wmask = {{8{host_addr[1:0] == 2'd3}}, {8{host_addr[1:0] == 2'd2}},
                     {8{host_addr[1:0] == 2'd1}}, {8{host_addr[1:0] == 2'd0}}};
@@ -205,7 +205,7 @@ module pg_ahb (
       sram_wmask = 32'hFFFF_FFFF;
     end else if (!cpu_halted && ap_sram_read && hready) begin
       sram_en    = 1'b1;
-      sram_addr  = haddr[12:2];
+      sram_addr  = haddr[13:2];
     end
   end
 
@@ -246,6 +246,6 @@ module pg_ahb (
   wire alt_sel = dp_io || hold_v;   // both registered
   assign hrdata = alt_sel ? alt_d : sram_rdata;
 
-  wire _unused = &{1'b0, dp_addr[31:13], htrans[0], dp_size[2], host_addr[15:13]};
+  wire _unused = &{1'b0, dp_addr[31:14], htrans[0], dp_size[2], host_addr[15:14]};
 
 endmodule

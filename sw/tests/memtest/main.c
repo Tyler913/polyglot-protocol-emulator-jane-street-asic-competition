@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * memtest: exercise byte, halfword and word stores and loads (including
- * store-then-load back to back) and report the result in PG_SHARED (0x1F00).
+ * store-then-load back to back) and report the result in PG_SHARED (0x2F00).
  * Used by test/test_boot.py. The host halts the CPU and reads PG_SHARED.
  */
 

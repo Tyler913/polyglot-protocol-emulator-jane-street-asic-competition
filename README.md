@@ -30,6 +30,6 @@ make -C test                     # RTL simulation with Icarus Verilog + cocotb
 ## Credits
 
 - CPU: [Hazard3](https://github.com/Wren6991/Hazard3), Luke Wren, Apache-2.0 (one marked local change, see above).
-- SRAM: IHP `RM_IHPSG13_1P_1024x64_c2_bm_bist` macro (8 KB) from the IHP Open PDK.
+- SRAM: IHP `RM_IHPSG13_1P_1024x64_c2_bm_bist` (8 KB) and `RM_IHPSG13_1P_1024x32_c2_bm_bist` (4 KB) macros from the IHP Open PDK: 12 KB.
 - SRAM power-grid approach (stripes on the macro's Metal4 supply columns) after Ken Pettit's [IHP SRAM walkthrough](https://kdp1965.github.io/ihp-um-janestreet-prism/ihp_sram_macro.html); our step is written from scratch.
 - Project template: [Tiny Tapeout IHP Verilog template](https://github.com/TinyTapeout/ttihp-verilog-template).

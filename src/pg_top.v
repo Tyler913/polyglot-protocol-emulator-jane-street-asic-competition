@@ -19,7 +19,8 @@
  *   uio[7:0]  bidirectional protocol pins (pins 0..7)
  *
  * CPU memory map
- *   0x0000_0000 - 0x0000_1FFF  SRAM, 8 KB (code + data; the last 256 bytes are the host mailbox)
+ *   0x0000_0000 - 0x0000_2FFF  SRAM, 12 KB (code + data; the last 256 bytes are the host mailbox;
+ *                              0x3000-0x3FFF repeats 0x2000-0x2FFF, higher addresses repeat the 16 KB)
  *   0x8000_0000 - 0x8000_00FF  system registers, timed GPIO (pg_sysio, pg_io)
  *   0x8000_0100 + 0x100*n      Wire Engine n (pg_wire)
  *
@@ -166,13 +167,13 @@ module tt_um_tyler913_polyglot (
   // Bus fabric, SRAM, I/O (system registers, timed GPIO, wire engines)
   // ---------------------------------------------------------------------
   wire        sram_en, sram_we;
-  wire [10:0] sram_addr;
+  wire [11:0] sram_addr;
   wire [31:0] sram_wdata, sram_wmask, sram_rdata;
   wire        reg_valid, reg_write, reg_ready;
   wire [11:0] reg_addr;
   wire [31:0] reg_wdata, reg_rdata;
   wire        dma_req, dma_we, dma_gnt;
-  wire [10:0] dma_addr;
+  wire [11:0] dma_addr;
   wire [31:0] dma_wdata;
 
   pg_ahb u_ahb (

@@ -125,9 +125,11 @@ More protocols than fit in memory at once can run as a queue (`sw/tests/queue`, 
 
 Job sizes: UART echo 208 bytes, WS2812 454, SPI RAM 694, CAN send/receive 784, I2C EEPROM write/poll/read 1122. To fit, the host passes bit periods already computed (`can_init_fix8`, `WIRE_UART_8N1_FIX8`) so no divide routine is linked into each job, and each job points `gp` at its own data, which makes most static-variable accesses one instruction.
 
-### Fitting in 8 KB
+### Fitting in 12 KB
 
-The program, its data and a 256-byte stack share about 7.5 KB (the top 256 bytes are the host mailbox; until 2026-11-22 the chip had 4 KB, and every program here was written to fit 3.5 KB). Measured sizes (code + data, GCC 15 `-Os`): UART echo 485 B, SPI RAM 674 B, I2C EEPROM 954 B, CAN 734 B, USB HID keyboard 1.9 KB, and all of CAN + SPI + UART + I2C as concurrent tasks 3.5 KB. The core has no multiply/divide unit, so avoid 64-bit arithmetic at run time: one 64-bit division pulls about 1.4 KB of libgcc into the image. `protocol.h` keeps its own helpers 32-bit.
+The program, its data and its stack share about 11.75 KB (the top 256 bytes are the host mailbox; the chip had 4 KB until 2026-11-21 and 8 KB until 2026-11-22, and every program here was written to fit 3.5 KB). Measured sizes (code + data + bss, GCC 15 `-Os`): UART echo 485 B, SPI RAM 674 B, I2C EEPROM 954 B, CAN 734 B, USB HID keyboard 2.1 KB, and all of CAN + SPI + UART + I2C as concurrent tasks 3.5 KB. For scale (RTL simulation and size measurements, 2026-11-22): the four largest examples together (USB full-speed keyboard, 10BASE-T ping, Modbus server, IO-Link master) take 7.1 KB as one image, and the 22 smallest examples fit in one image of 7.1 KB with a host-selected entry point. The core has no multiply/divide unit, so avoid 64-bit arithmetic at run time: one 64-bit division pulls about 1.4 KB of libgcc into the image. `protocol.h` keeps its own helpers 32-bit.
+
+Several fast protocols at once: each engine FIFO holds 4 words, which is 40 us at 1 Mbaud UART or 128 us of CAN at 1 Mbit/s. In a round-robin loop of cooperative tasks, the longest step of every task added together must stay below the FIFO time of each stream the CPU serves directly (decoding a CAN frame in C takes about 1,800 cycles). Faster streams go through a DMA ring. With the UART on DMA, `sw/tests/stress4` runs a 5 Mbaud UART echo, a 16.7 MHz SPI RAM, a 1 MHz I2C EEPROM and 1 Mbit/s CAN at the same time with every byte and frame correct; with the UART served by the CPU, it loses bytes already at 1 Mbaud (RTL simulation, `test/test_stress4.py`).
 
 ## 6. Reference (protocol.h)
 

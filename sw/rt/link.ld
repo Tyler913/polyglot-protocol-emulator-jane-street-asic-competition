@@ -2,9 +2,9 @@
  * Copyright (c) 2026 Tyler Hong
  * SPDX-License-Identifier: Apache-2.0
  *
- * Linker script: one 8 KB SRAM holds code, data, bss and the stack.
- * The last 256 bytes (0x1F00-0x1FFF) are shared with the host (PG_SHARED in
- * protocol.h); the stack grows down from 0x1F00.
+ * Linker script: the 12 KB SRAM holds code, data, bss and the stack.
+ * The last 256 bytes (0x2F00-0x2FFF) are shared with the host (PG_SHARED in
+ * protocol.h); the stack grows down from 0x2F00.
  */
 
 OUTPUT_ARCH(riscv)
@@ -12,7 +12,7 @@ ENTRY(_start)
 
 MEMORY
 {
-    RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 8K
+    RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 12K
 }
 
 SECTIONS

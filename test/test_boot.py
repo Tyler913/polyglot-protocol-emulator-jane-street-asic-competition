@@ -28,6 +28,23 @@ async def test_load_readback(dut):
 
 
 @cocotb.test()
+async def test_memory_span(dut):
+    """All 12 KB answer as distinct memory: patterns at the start, across the
+    8 KB macro boundary (0x2000) and at the end of the second macro survive
+    each other, and 0x3000 repeats 0x2000 (the documented address repeat)."""
+    await reset(dut)
+    host = HostSpi(dut)
+    spots = [0x0000, 0x1000, 0x1FF8, 0x2400, 0x2EF0]
+    pats = {a: bytes(((a >> 4) * 13 + i * 29 + 5) & 0xFF for i in range(16)) for a in spots}
+    for a in spots:
+        await host.write(a, pats[a])
+    for a in spots:
+        back = await host.read(a, 16)
+        assert back == pats[a], f"at {a:#06x}: read {back.hex()} != {pats[a].hex()}"
+    assert await host.read(0x3400, 16) == pats[0x2400], "0x3400 should repeat 0x2400"
+
+
+@cocotb.test()
 async def test_memtest(dut):
     """C firmware exercises byte/halfword/word loads and stores through the bus fabric."""
     image = build_firmware("memtest")

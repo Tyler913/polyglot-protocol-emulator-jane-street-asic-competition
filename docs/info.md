@@ -8,7 +8,7 @@ You can also include images in this folder and reference them in the markdown. E
 
 ## How it works
 
-Polyglot is a protocol emulator that you program in plain C. A Hazard3 RISC-V core (RV32EC, the core used in the RP2350) runs a program compiled with stock GCC or Clang from 8 KB of on-chip SRAM. The program drives the protocol pins through memory-mapped registers declared in one header, `protocol.h`.
+Polyglot is a protocol emulator that you program in plain C. A Hazard3 RISC-V core (RV32EC, the core used in the RP2350) runs a program compiled with stock GCC or Clang from 12 KB of on-chip SRAM. The program drives the protocol pins through memory-mapped registers declared in one header, `protocol.h`.
 
 Two kinds of hardware give the C program exact timing:
 
@@ -28,7 +28,7 @@ Status: CPU, SRAM, host loader, timed GPIO, edge capture and the Wire Engines pa
 | CTRL | `03 V` | bit 0 = RUN (1 releases the CPU from reset) |
 | STATUS | `04 xx` | the second byte returns status (bit 0 = RUN) |
 
-Load a program while RUN = 0, then set RUN = 1. The program starts at address 0. The last 256 bytes of SRAM (0x1F00-0x1FFF) are reserved for parameters and results shared with the host. The firmware can raise HOST_IRQ (uo[6]) to signal the host.
+Load a program while RUN = 0, then set RUN = 1. The program starts at address 0. The last 256 bytes of SRAM (0x2F00-0x2FFF) are reserved for parameters and results shared with the host. The firmware can raise HOST_IRQ (uo[6]) to signal the host.
 
 ### Pin numbering in `protocol.h`
 

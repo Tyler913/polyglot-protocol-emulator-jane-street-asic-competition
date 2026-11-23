@@ -11,7 +11,7 @@
 `default_nettype none
 
 module pg_sram #(
-    parameter AW = 11
+    parameter AW = 12   // 16 KB of block RAM: a superset of the chip's 12 KB (no address repeat)
 ) (
     input  wire        clk,
     input  wire        en,

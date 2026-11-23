@@ -61,7 +61,7 @@ module pg_io #(
     // DMA SRAM port (to pg_ahb)
     output wire        dma_req,
     output wire        dma_we,
-    output wire [10:0] dma_addr,
+    output wire [11:0] dma_addr,
     output wire [31:0] dma_wdata,
     input  wire        dma_gnt,
     input  wire [31:0] sram_rdata
