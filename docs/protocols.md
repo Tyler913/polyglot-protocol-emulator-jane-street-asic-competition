@@ -100,6 +100,9 @@ Size = code + initialized data in bytes (GCC 15, `-Os`), out of about 11.5 KB fo
 | UART at 1 Mbaud received and sent by DMA while the CPU does not touch the engine (120 bytes back to back each way) | `dma` (test) | `test_dma` |
 | Logic analyzer (all inputs every 10 cycles) and pattern generator (uo pins every 25 cycles, exact) at the same time, by DMA | `dma` (test) | `test_dma` |
 | CAN FD frames back to back at 1 + 5 Mbit/s into a DMA ring while C works 100 us per frame | `canfd_rx` (test) | `test_canfd` (the same test without DMA loses frames) |
+| CAN <-> serial adapter (Lawicel/SLCAN text, as used by python-can and SocketCAN `slcand`): CAN 1 Mbit/s at full bus load to text on a 3 Mbaud UART, `t`/`T` commands sent with arbitration retry, acceptance filter, timestamps (5.9 KB) | `can_gateway` | `test_can_gateway` (3,000 frames back to back with the 3-bit intermission, all forwarded; 30 frames sent while receiving) |
+| Logic analyzer: burst of 2,599 samples of all inputs at 25 MS/s (10.4 KB of SRAM), or a change log that keeps 30,000 samples at 1.67 MS/s in 6 KB | `logic_analyzer` | `test_logic_analyzer` |
+| UART 5 Mbaud (DMA) + SPI 16.7 MHz + I2C 1 MHz + CAN 1 Mbit/s at host-chosen rates | `stress4` (test) | `test_stress4` (not in the default list) |
 
 ## Clock rates
 

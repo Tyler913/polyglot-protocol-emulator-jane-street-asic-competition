@@ -53,3 +53,4 @@ src/_alt*/
 src/_iso_*/
 .claude/
 src/_*/
+test/test_coremark.py
