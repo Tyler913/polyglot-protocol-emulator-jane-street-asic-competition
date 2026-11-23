@@ -274,6 +274,7 @@ typedef struct {
 #define DMA_PACE_TX     (2u << 2)
 #define DMA_PACE_FREE   (3u << 2)
 #define DMA_ENGINE(n)   (((uint32_t)(n) & 3u) << 4)
+#define DMA_STREAM      (1u << 6)  /* timer pace: a full IO->SRAM / empty SRAM->IO ring is a miss */
 #define DMA_MISSED      1u      /* STATUS: a timer tick found the channel not ready */
 #define DMA_BUSY        2u
 #define DMA_EMPTY       4u
@@ -349,6 +350,13 @@ static inline void dma_put(pg_dma_t *d, uint32_t x)
 static inline void dma_capture(pg_dma_t *d, uint32_t *buf, uint32_t n, uint32_t period)
 {
     dma_start(d, DMA_PACE_TIMER, &PG_GPIO_IN, buf, n, period);
+}
+
+/* The same as a continuous stream into the ring buf[0..n): C reads it (dma_get) while it
+ * fills; a sample that finds the ring full is lost and sets DMA_MISSED. */
+static inline void dma_capture_stream(pg_dma_t *d, uint32_t *buf, uint32_t n, uint32_t period)
+{
+    dma_start(d, DMA_PACE_TIMER | DMA_STREAM, &PG_GPIO_IN, buf, n, period);
 }
 
 /* Pattern generator: write buf[0..count) to GPIO_OUT, one word every period cycles */

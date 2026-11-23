@@ -13,7 +13,11 @@
  * Registers (0x8000_0500 + 0x20 * channel, word access):
  *   0x00 CTRL   RW  [0] EN, [1] TO_IO (0: IO register -> SRAM, 1: SRAM -> IO
  *                   register), [3:2] PACE (0 timer, 1 engine RX data, 2
- *                   engine TX room, 3 free), [5:4] engine for PACE 1/2
+ *                   engine TX room, 3 free), [5:4] engine for PACE 1/2,
+ *                   [6] STREAM (timer pace): the ring is a continuous stream,
+ *                   so a tick that finds an IO -> SRAM ring full or an
+ *                   SRAM -> IO ring empty is missed (a lost or late sample)
+ *                   instead of the normal end of a one-shot run
  *   0x04 REG    RW  [11:0] IO register offset (from 0x8000_0000)
  *   0x08 START  RW  ring start, byte address in SRAM (word aligned)
  *   0x0C END    RW  ring end (exclusive)
@@ -28,7 +32,8 @@
  *                   found the channel not ready (the previous word not yet
  *                   stored, or the next one not yet fetched); an empty
  *                   SRAM -> IO ring or a full IO -> SRAM ring is the normal
- *                   end, not a miss. [1] busy, [2] ring empty, [3] ring full
+ *                   end, not a miss, unless CTRL.STREAM is set.
+ *                   [1] busy, [2] ring empty, [3] ring full
  *
  * Timer pace is exact: the IO access happens in the tick's cycle (SRAM ->
  * IO words are fetched ahead), unless the other channel uses the IO bus in
@@ -75,7 +80,7 @@ module pg_dma #(
     output wire [1:0]  ev
 );
 
-  reg  [5:0]  ctrl   [0:1];
+  reg  [6:0]  ctrl   [0:1];
   reg  [11:0] ioreg  [0:1];
   reg  [11:0] start  [0:1];   // SRAM word addresses (12 KB)
   reg  [11:0] rend   [0:1];
@@ -88,7 +93,7 @@ module pg_dma #(
   reg         pend   [0:1];   // timer tick waiting for the IO bus
   reg         missed [0:1];
 
-  wire [1:0] want_bus, want_sram, bus_done, sram_done, tick, idle_end;
+  wire [1:0] want_bus, want_sram, bus_done, sram_done, tick, idle_end, lost;
   wire [11:0] nxt [0:1];
 
   genvar k;
@@ -98,6 +103,7 @@ module pg_dma #(
       wire        to_io = ctrl[k][1];
       wire [1:0]  pace  = ctrl[k][3:2];
       wire [1:0]  eng   = ctrl[k][5:4];
+      wire        strm  = ctrl[k][6];
       wire        ptick = (tmr[k] == 16'd0);
       wire        epace = (pace == 2'd1) ? rx_avail[eng] : (pace == 2'd2) ? tx_room[eng] : 1'b1;
       assign nxt[k]  = (head[k] + 12'd1 == rend[k]) ? start[k] : head[k] + 12'd1;
@@ -106,6 +112,7 @@ module pg_dma #(
       assign tick[k] = en && pace == 2'd0 && ptick;
       // nothing left to do: an empty SRAM -> IO ring, a full IO -> SRAM ring
       assign idle_end[k] = to_io ? (st[k] == 2'd0 && empty) : full;
+      assign lost[k]     = strm && idle_end[k];         // a stream ran dry / over
       wire        go    = (pace == 2'd0) ? (ptick || pend[k]) : epace;
       // IO -> SRAM: st 0 wait, IO read -> st 1, SRAM write -> st 0
       // SRAM -> IO: st 0 SRAM read -> st 1, data -> st 2, IO write -> st 0
@@ -140,7 +147,7 @@ module pg_dma #(
   always @(posedge clk) begin
     for (c = 0; c < 2; c = c + 1) begin
       if (rst) begin
-        ctrl[c]   <= 6'd0;
+        ctrl[c]   <= 7'd0;
         ioreg[c]  <= 12'd0;
         start[c]  <= 12'd0;
         rend[c]   <= 12'd0;
@@ -178,14 +185,14 @@ module pg_dma #(
         // "missed" (late) if the channel was not ready or a tick was pending
         if (bus_done[c])                    pend[c] <= 1'b0;
         else if (tick[c] && !idle_end[c])   pend[c] <= 1'b1;
-        if (tick[c] && !idle_end[c] && (pend[c] || !want_bus[c])) missed[c] <= 1'b1;
+        if (tick[c] && (lost[c] || (!idle_end[c] && (pend[c] || !want_bus[c])))) missed[c] <= 1'b1;
         if (!ctrl[c][0]) begin
           st[c]   <= 2'd0;
           pend[c] <= 1'b0;
         end
         if (cfg_wr && ch == c[0]) begin
           case (ra)
-            3'd0: ctrl[c]   <= wdata[5:0];
+            3'd0: ctrl[c]   <= wdata[6:0];
             3'd1: ioreg[c]  <= wdata[11:0];
             3'd2: start[c]  <= wdata[13:2];
             3'd3: rend[c]   <= wdata[13:2];
@@ -202,7 +209,7 @@ module pg_dma #(
 
   always @(*) begin
     case (ra)
-      3'd0:    rdata = {26'd0, ctrl[ch]};
+      3'd0:    rdata = {25'd0, ctrl[ch]};
       3'd1:    rdata = {20'd0, ioreg[ch]};
       3'd2:    rdata = {18'd0, start[ch], 2'b00};
       3'd3:    rdata = {18'd0, rend[ch], 2'b00};

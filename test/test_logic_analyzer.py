@@ -5,10 +5,11 @@
 - Burst mode at 25, 16.7 and 50 MS/s: the testbench drives uio[7:0] with a
   count that steps every clock; every one of the 2,599 samples must be the
   count exactly PERIOD later than the one before (none late, none missed).
-- Change-log mode: a random bit stream on ui[0] (10 samples per bit),
+- Change-log mode (a DMA stream): a random bit stream on ui[0] (10 samples per bit),
   sampled every LA_LOG_PERIOD cycles (default 30: 1.67 MS/s, the most the CPU
   keeps up with at about 26 cycles per sample) for 30,000 samples, kept as changes only; the edges rebuilt from the
-  log must match the stream bit for bit (within one sample).
+  log must match the stream bit for bit (within one sample), with no sample
+  lost; at 5 MS/s the CPU falls behind and the DMA must flag the lost samples.
 Results are logged as "LA {...}"."""
 
 import json
@@ -77,10 +78,9 @@ async def test_burst_50msps_limit(dut):
     assert out["late_flag"] == 1 or out["wrong_steps"] == 0, out
 
 
-@cocotb.test()
-async def test_change_log(dut):
+async def change_log(dut, period):
     rng = random.Random(7)
-    period, bit, nsamp = PERIOD_LOG, 10 * PERIOD_LOG, 30_000
+    bit, nsamp = 10 * period, 30_000
     host = await start(dut)
     ui = ui_pins(dut)
     ui.set(0, 1)
@@ -126,4 +126,18 @@ async def test_change_log(dut):
                samples_lost_est=max(0, round(r[6] / period) - nsamp),
                values_match=got_vals[1:m] == exp_vals[1:m], lengths_match=inner_ok)
     dut._log.info("LA " + json.dumps(out))
-    assert out["values_match"] and out["lengths_match"] and r[5] == 0 and (r[2] & 1) == 0, out
+    return out
+
+
+@cocotb.test()
+async def test_change_log(dut):
+    out = await change_log(dut, PERIOD_LOG)
+    assert out["values_match"] and out["lengths_match"] and out["late_flag"] == 0, out
+
+
+@cocotb.test()
+async def test_change_log_overrun(dut):
+    """Too fast for the CPU (5 MS/s): the DMA stream (CTRL.STREAM) must report
+    the samples it had to drop when the ring was full."""
+    out = await change_log(dut, 10)
+    assert out["late_flag"] == 1, out

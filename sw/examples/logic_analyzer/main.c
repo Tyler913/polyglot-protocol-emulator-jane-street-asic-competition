@@ -12,7 +12,9 @@
  *          changes, one word each: [31:16] ui[7:0] << 8 | uio[7:0],
  *          [15:0] samples since the previous entry (0xFFFF: no change for
  *          65,535 samples, entry repeats the value). Sparse signals (serial
- *          buses) fit seconds of activity into the same memory.
+ *          buses) fit seconds of activity into the same memory. The DMA
+ *          runs as a stream: if the CPU falls behind (above about 1.7 MS/s),
+ *          samples are lost and the late flag ([10] bit 0) says so.
  *
  * Host parameters: [0] mode, [1] period (cycles, >= 1), [2] samples (mode 0;
  * 0 = all), [3] trigger mask, [4] trigger value (start when (GPIO_IN & mask)
@@ -53,7 +55,7 @@ int main(void)
         static uint32_t ring[64];
         uint32_t k = 0, last, run = 0, seen = 1, ti = 1;
         const uint32_t base = (uint32_t)(uintptr_t)ring;
-        dma_capture(DMA1, ring, 64, period);
+        dma_capture_stream(DMA1, ring, 64, period);   /* a full ring = lost samples */
         while (DMA1->HEAD == base) { }
         last = compact(ring[0]);
         DMA1->TAIL = base + 4u;
