@@ -16,7 +16,7 @@
  *
  * Host parameters: [0] seed. [1] = 0x600DBE7C when done.
  * Used by test/test_bench.py. Uses 4 KB buffer + 4 KB copy + 1 KB table: a
- * program like this needs the 12 KB SRAM.
+ * program like this needs more than the 8 KB SRAM of earlier layouts.
  */
 
 #include "protocol.h"

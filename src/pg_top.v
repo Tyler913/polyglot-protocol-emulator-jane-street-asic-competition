@@ -19,8 +19,8 @@
  *   uio[7:0]  bidirectional protocol pins (pins 0..7)
  *
  * CPU memory map
- *   0x0000_0000 - 0x0000_2FFF  SRAM, 12 KB (code + data; the last 256 bytes are the host mailbox;
- *                              0x3000-0x3FFF repeats 0x2000-0x2FFF, higher addresses repeat the 16 KB)
+ *   0x0000_0000 - 0x0000_37FF  SRAM, 14 KB (code + data; the last 256 bytes are the host mailbox;
+ *                              0x3800-0x3FFF repeats 0x3000-0x37FF, higher addresses repeat the 16 KB)
  *   0x8000_0000 - 0x8000_00FF  system registers, timed GPIO (pg_sysio, pg_io)
  *   0x8000_0100 + 0x100*n      Wire Engine n (pg_wire)
  *

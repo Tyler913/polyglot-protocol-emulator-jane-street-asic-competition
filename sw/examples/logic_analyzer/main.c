@@ -2,12 +2,12 @@
  * Copyright (c) 2026 Tyler Hong
  * SPDX-License-Identifier: Apache-2.0
  *
- * logic_analyzer: the 12 KB SRAM as a capture buffer. DMA channel 1 samples
+ * logic_analyzer: the 14 KB SRAM as a capture buffer. DMA channel 1 samples
  * GPIO_IN (the ui and uio pins, and the uo pins as driven) every PERIOD
  * cycles; the host reads the buffer over SPI when the run is done.
  *
  *   mode 0, burst: raw 32-bit samples straight into BUF_WORDS words of SRAM
- *          (about 10.4 KB): 2,599 samples, up to 25 MS/s (PERIOD 2).
+ *          (about 12.4 KB): 3,099 samples, up to 25 MS/s (PERIOD 2).
  *   mode 1, change log: the DMA fills a 64-word ring; the CPU keeps only
  *          changes, one word each: [31:16] ui[7:0] << 8 | uio[7:0],
  *          [15:0] samples since the previous entry (0xFFFF: no change for
@@ -27,7 +27,7 @@
 
 #include "protocol.h"
 
-#define BUF_WORDS 2600
+#define BUF_WORDS 3100
 static uint32_t buf[BUF_WORDS];
 
 static uint32_t compact(uint32_t v) { return (v & 0xFFu) | ((v >> 8) & 0xFF00u); }

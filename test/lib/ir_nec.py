@@ -12,6 +12,7 @@ decoder), from the NEC protocol description, not from the firmware:
 
 import cocotb
 from cocotb.triggers import FallingEdge
+from .pins import bit
 
 
 class NecReceiver:
@@ -31,7 +32,7 @@ class NecReceiver:
         while True:
             await FallingEdge(self.dut.clk)
             t += 1
-            v = (int(self.dut.uo_out.value) >> self.bit) & 1
+            v = bit(self.dut.uo_out, self.bit)
             if v != prev:
                 self.edges.append((t * self.ns, v))
                 prev = v

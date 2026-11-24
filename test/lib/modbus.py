@@ -13,6 +13,7 @@ from cocotb.triggers import ClockCycles
 from cocotb.utils import get_sim_time
 
 from .uart import UartDriver, UartMonitor
+from .pins import bit
 
 
 def crc16(data):
@@ -36,7 +37,7 @@ class ModbusServer:
         self.char = 10 * self.bit  # 8N1 (the spec's 11-bit character assumes parity or 2 stop bits)
         self.t35 = 1.75e-3 * f_clk if baud > 19200 else 3.5 * self.char
         self.t15 = 0.75e-3 * f_clk if baud > 19200 else 1.5 * self.char
-        self.mon = UartMonitor(dut, lambda: (int(dut.uo_out.value) >> tx_uo) & 1, self.bit)
+        self.mon = UartMonitor(dut, lambda: bit(dut.uo_out, tx_uo), self.bit)
         self.drv = UartDriver(dut, rx_ui, self.bit)
         self.requests, self.errors = [], []
         self.last_end = -10**9  # cycle where the last reply ended

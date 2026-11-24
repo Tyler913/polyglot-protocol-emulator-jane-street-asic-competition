@@ -82,7 +82,7 @@ module pg_dma #(
 
   reg  [6:0]  ctrl   [0:1];
   reg  [11:0] ioreg  [0:1];
-  reg  [11:0] start  [0:1];   // SRAM word addresses (12 KB)
+  reg  [11:0] start  [0:1];   // SRAM word addresses (14 KB)
   reg  [11:0] rend   [0:1];
   reg  [11:0] head   [0:1];
   reg  [11:0] tail   [0:1];

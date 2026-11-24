@@ -3,7 +3,7 @@
 """Logic analyzer (sw/examples/logic_analyzer): the SRAM as a capture buffer.
 
 - Burst mode at 25, 16.7 and 50 MS/s: the testbench drives uio[7:0] with a
-  count that steps every clock; every one of the 2,599 samples must be the
+  count that steps every clock; every one of the 3,099 samples must be the
   count exactly PERIOD later than the one before (none late, none missed).
 - Change-log mode (a DMA stream): a random bit stream on ui[0] (10 samples per bit),
   sampled every LA_LOG_PERIOD cycles (default 30: 1.67 MS/s, the most the CPU

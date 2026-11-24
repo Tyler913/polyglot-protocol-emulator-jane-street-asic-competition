@@ -57,3 +57,22 @@ class SramStripes(OdbpyStep):
             "--region", str(x0), str(x1),
             "--halo", str(self.config["SRAM_STRIPES_HALO"]),
         ]
+
+
+@Step.factory.register()
+class MergeTies(OdbpyStep):
+    id = "Polyglot.MergeTies"
+    name = "Merge tie cells before placement"
+
+    config_vars = [
+        Variable("MERGE_TIES_HI", str, "Tie-high cell to merge.", default="sg13cmos5l_tiehi"),
+        Variable("MERGE_TIES_LO", str, "Tie-low cell to merge.", default="sg13cmos5l_tielo"),
+        Variable("MERGE_TIES_GROUP", int, "Loads per kept tie cell (0: a single tie for all).", default=0),
+    ]
+
+    def get_script_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "flow", "odb_merge_ties.py")
+
+    def get_command(self) -> List[str]:
+        return super().get_command() + ["--tiehi", self.config["MERGE_TIES_HI"], "--tielo", self.config["MERGE_TIES_LO"],
+                                        "--group", str(self.config["MERGE_TIES_GROUP"])]

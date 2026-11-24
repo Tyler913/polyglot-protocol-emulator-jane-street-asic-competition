@@ -7,6 +7,7 @@ G-R-B, MSB first."""
 
 import cocotb
 from cocotb.triggers import FallingEdge
+from .pins import bit
 
 
 class Ws2812Model:
@@ -28,7 +29,7 @@ class Ws2812Model:
         while True:
             await FallingEdge(self.dut.clk)
             t += 1
-            v = (int(self.dut.uo_out.value) >> self.bit) & 1
+            v = bit(self.dut.uo_out, self.bit)
             if v and not level:
                 if last_rise is not None and self.bits:
                     period = (t - last_rise) * self.ns

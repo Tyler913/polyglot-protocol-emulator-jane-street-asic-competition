@@ -79,7 +79,7 @@ def main(reader, master_prefix, layer, width, pitch, offset, spacing, region, ha
     vias = {n: [max(stack[n][cut].values(), key=lambda t: t[0])[1] for cut in sorted(stack[n])] for n in stack}
 
     # Supply columns of every SRAM instance (absolute x centres), and macro boxes
-    cols = {"VPWR": {}, "VGND": {}}  # x -> instance box
+    cols = {"VPWR": {}, "VGND": {}}  # x -> boxes of the instances with a column there
     boxes = []
     for inst in block.getInsts():
         master = inst.getMaster()
@@ -101,7 +101,7 @@ def main(reader, master_prefix, layer, width, pitch, offset, spacing, region, ha
                         continue
                     xc = (g.xMin() + g.xMax()) // 2
                     xc = box.xMin() + (master.getWidth() - xc if flip_x else xc)
-                    cols[net][xc] = box
+                    cols[net].setdefault(xc, []).append(box)   # macros stacked in x share columns
     if not boxes:
         raise SystemExit("[ERROR] no SRAM instances")
 
@@ -146,11 +146,12 @@ def main(reader, master_prefix, layer, width, pitch, offset, spacing, region, ha
                     odb.dbSBox_create(swire, v, x, yc, "STRIPE")
                     vias_added += 1
         # 2. Column stripes over the macro for every other column
-        for x, box in cols[net_name].items():
+        for x, bl in cols[net_name].items():
             if x in trunks[net_name]:
                 continue
-            odb.dbSBox_create(swire, tech_layer, x - half_w, box.yMin(), x + half_w, box.yMax(), "STRIPE")
-            added += 1
+            for box in bl:
+                odb.dbSBox_create(swire, tech_layer, x - half_w, box.yMin(), x + half_w, box.yMax(), "STRIPE")
+                added += 1
 
     print(f"[INFO] trunks VPWR at {[x / dbu for x in trunks['VPWR']]}")
     print(f"[INFO] trunks VGND at {[x / dbu for x in trunks['VGND']]}")

@@ -12,6 +12,7 @@ of a bit). The line is ignored until it first goes high (reset state)."""
 
 import cocotb
 from cocotb.triggers import FallingEdge
+from .pins import bit
 
 
 class Dmx512Model:
@@ -56,7 +57,7 @@ class Dmx512Model:
         while True:
             await FallingEdge(self.dut.clk)
             t += 1
-            v = (int(self.dut.uo_out.value) >> self.bit) & 1
+            v = bit(self.dut.uo_out, self.bit)
             if level is None:
                 level = v
             if state == "slot" and t - slot_start >= 11 * bit_c:   # 11 bit times since the start bit

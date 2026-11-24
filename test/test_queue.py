@@ -20,6 +20,7 @@ from cocotb.triggers import ClockCycles, ReadOnly, RisingEdge
 from lib.can import CanBus, CanNode
 from lib.i2c import I2cEeprom, OpenDrainBus
 from lib.soc import CLK_NS, F_CPU, SHARED, build_firmware, host_irq, load, read_shared, start, words_to_bytes
+from lib.pins import bit
 from lib.spi import SpiRam
 from lib.uart import UartDriver, UartMonitor, bit_cycles
 from lib.ws2812 import Ws2812Model
@@ -79,8 +80,8 @@ async def test_queue_eight_jobs(dut):
     ee1 = i2c.add(I2cEeprom(i2c, sda=1, scl=2, write_cycles=30 * F_CPU // 100_000))
     ee2 = i2c.add(I2cEeprom(i2c, sda=4, scl=5, write_cycles=30 * F_CPU // 400_000))
     u1bit, u2bit = bit_cycles(115_200), bit_cycles(1_000_000)
-    mon1 = UartMonitor(dut, lambda: (int(dut.uo_out.value) >> 1) & 1, u1bit)
-    mon2 = UartMonitor(dut, lambda: int(dut.uo_out.value) & 1, u2bit)
+    mon1 = UartMonitor(dut, lambda: bit(dut.uo_out, 1), u1bit)
+    mon2 = UartMonitor(dut, lambda: bit(dut.uo_out, 0), u2bit)
     drv1, drv2 = UartDriver(dut, 0, u1bit), UartDriver(dut, 4, u2bit)
     leds = Ws2812Model(dut, uo_bit=5, clk_ns=CLK_NS)
     for m in (can1, can2, ram, i2c, leds):

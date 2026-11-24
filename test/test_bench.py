@@ -3,7 +3,7 @@
 """CPU compute benchmark (sw/tests/bench): CRC-32 two ways, SHA-256, word
 copy and libgcc multiply/divide on a 4 KB buffer. Every result is recomputed
 here; the cycle counts are logged as one "BENCH {...}" line with derived
-rates at 50 MHz. The program uses about 11 KB, so it needs the 12 KB SRAM."""
+rates at 50 MHz. The program uses about 11 KB, so it needs more than the 8 KB SRAM of earlier layouts."""
 
 import binascii
 import hashlib

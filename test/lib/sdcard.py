@@ -13,7 +13,7 @@ import cocotb
 from cocotb.triggers import ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
 
-from .pins import ui_pins
+from .pins import bit, ui_pins
 
 
 def crc7(data):
@@ -62,8 +62,8 @@ class SdCard:
         self._task.cancel()
 
     def _pins(self):
-        v = int(self.dut.uo_out.value)
-        return (v >> self.sck) & 1, (v >> self.mosi) & 1, (v >> self.cs) & 1
+        o = self.dut.uo_out   # single bits: uo_out[7] (host MISO) can be X
+        return bit(o, self.sck), bit(o, self.mosi), bit(o, self.cs)
 
     async def _run(self):
         sck_l, _, cs_l = self._pins()

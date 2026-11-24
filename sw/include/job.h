@@ -5,7 +5,7 @@
  * job.h: protocol jobs for the job-queue kernel (sw/tests/queue).
  *
  * Memory: kernel 0x000-0x0FF, four job slots 0x100-0xDFF, the kernel's stack
- * below 0x2F00, host mailbox 0x2F00-0x2FFF (0xE00-0x2EFF is free for more). Slot k uses Wire Engine k; slots differ in size
+ * below 0x3700, host mailbox 0x3700-0x37FF (0xE00-0x36FF is free for more). Slot k uses Wire Engine k; slots differ in size
  * (engines 0 and 1 are full engines, 2 and 3 lite):
  *   slot 0  0x100  832 bytes   slot 2  0x740  512 bytes
  *   slot 1  0x440  768 bytes   slot 3  0x940 1216 bytes

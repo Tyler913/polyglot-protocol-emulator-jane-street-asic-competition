@@ -15,7 +15,7 @@ chip output, to test the chip as an SPI target.
 import cocotb
 from cocotb.triggers import ClockCycles, ReadOnly, RisingEdge
 
-from .pins import ui_pins
+from .pins import bit, ui_pins
 
 
 class SpiRam:
@@ -40,8 +40,9 @@ class SpiRam:
         self._task.cancel()
 
     def _pins(self):
-        v = int(self.dut.uo_out.value)
-        return (v >> self.sck) & 1, (v >> self.mosi) & 1, (v >> self.cs) & 1
+        # single bits: uo_out[7] (host MISO) can be X while the host writes
+        o = self.dut.uo_out
+        return bit(o, self.sck), bit(o, self.mosi), bit(o, self.cs)
 
     async def _run(self):
         sck_l, _, cs_l = self._pins()
@@ -127,7 +128,7 @@ class SpiController:
             self.ui.set(cs_ui, 1)
 
     def _miso(self):
-        return (int(self.dut.uo_out.value) >> self.miso_uo) & 1
+        return bit(self.dut.uo_out, self.miso_uo)
 
     async def select(self, v):
         self.ui.set(self.cs_ui, 0 if v else 1)

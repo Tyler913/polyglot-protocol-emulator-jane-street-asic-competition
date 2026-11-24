@@ -17,6 +17,7 @@ not from the RTL or the firmware.
 
 import cocotb
 from cocotb.triggers import FallingEdge
+from .pins import bit
 
 # TAP states
 TLR, RTI, SEL_DR, CAP_DR, SH_DR, EX1_DR, PAU_DR, EX2_DR, UPD_DR = range(9)
@@ -111,10 +112,10 @@ class JtagChain:
         while True:
             await FallingEdge(self.dut.clk)
             self.t += 1
-            out = int(self.dut.uo_out.value)
-            tck = (out >> self.tck) & 1
-            tms = (out >> self.tms) & 1
-            tdi = (out >> self.tdi) & 1
+            out = self.dut.uo_out   # single bits: uo_out[7] (host MISO) can be X
+            tck = bit(out, self.tck)
+            tms = bit(out, self.tms)
+            tdi = bit(out, self.tdi)
             if (tms, tdi) != self.pin:
                 if self.pin is not None:
                     self.t_chg = self.t
