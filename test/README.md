@@ -8,34 +8,17 @@ Protocol behaviour is judged by independent peer models written from the protoco
 
 ```sh
 pip install -r requirements.txt
-make -B                 # RTL simulation (Icarus Verilog)
-make -B GATES=yes       # gate-level simulation of a hardened netlist (copy it to gate_level_netlist.v first);
-                        # runs test_boot, test_quad and test_uart by default
+make -B                           # default RTL suite (Icarus Verilog; 37 modules, 79 tests)
+make -B SIM=verilator EXTENDED=yes # default + extended suite (62 modules, 114 tests)
+make -B GATES=yes                 # gate-level simulation of a hardened netlist (copy it to gate_level_netlist.v first);
+                                  # runs test_boot, test_quad and test_uart by default
+python3 mutation.py               # run mutation checks against the independent models (Verilator + RISC-V GCC)
 ```
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `test_boot.py` | bring-up: SPI load/read-back, byte/halfword/word memory test, blink timing, host access while the CPU keeps the SRAM busy |
-| `test_tgpio.py` | timed GPIO: every scheduled edge lands on its exact cycle; LATE flag, edge capture, blocking timeout |
-| `test_uart.py` | UART echo at 1 Mbaud (back to back) and 115200 baud; exact bit timing; framing error recovery |
-| `test_spi.py` | SPI controller against an SPI RAM model in modes 0-3 (1, 5 and 12.5 MHz with RX sample delay); SPI target with CS framing, frame events and an aborted frame (modes 0, 3) |
-| `test_i2c.py` | I2C controller against a 24C02-style EEPROM model (NACK, page write, ACK polling, repeated START, clock stretching, setup/hold checks); chip as I2C target driven by a controller model |
-| `lib/host.py` | model of the host SPI loader protocol |
-| `lib/soc.py` | reset, firmware build/load, shared-memory and HOST_IRQ helpers |
-| `test_usb.py` | USB low-speed line layer: DATA0 from the chip (NRZI, stuffing, CRC16, EOP, 33.33-cycle bits) and a host DATA1 into the chip with the hardware-timed ACK inside the 2..7.5 bit-time window |
-| `test_usb_hid.py` | USB low-speed HID keyboard written in C is enumerated by a host model (descriptors, SET_ADDRESS, SET_CONFIGURATION, SET_IDLE) and types "Hi"; every answer within the 7.5 bit-time turnaround. Second test: text sent to the chip's UART is typed over USB at the same time (two engines, one C loop) |
-| `test_eth.py` | 10BASE-T transmit at a 40 MHz clock: Manchester, differential TD+/TD-, preamble/SFD, CRC-32 FCS checked with zlib |
-| `test_ws2812.py` | WS2812 LEDs from a plain NRZ engine stream (3 line bits per LED bit), checked against datasheet pulse timing |
-| `test_onewire.py` | 1-Wire master from timed GPIO only (reset/presence, write and read slots), READ ROM from a DS18B20-style model with timing checks |
-| `test_can.py` | CAN 2.0A at 500 kbit/s against a CAN bus model with a second node: stuffing, CRC-15, ACK, and lost arbitration followed by a retry; the chip as a receiver acknowledges good frames (ACK timing and ACK delimiter checked) and not a frame with a bad CRC |
-| `test_dmx512.py` | DMX512 lighting controller from a plain engine stream (BREAK + MAB as one 26-bit word, 11-bit slots), checked against E1.11 transmitter timing; 16 and 512 channels |
-| `test_ps2.py` | PS/2 host on a lite engine clocked by the keyboard: reads frames, sends commands (inhibit, request to send, device ACK), against a keyboard model with timing checks |
-| `test_ir_nec.py` | NEC infrared remote: 38 kHz carrier synthesized as a 76 kbit/s bit stream, frame and repeat code, checked by a demodulating receiver model (slow: about 20 minutes, not in the default list) |
-| `test_swd.py` | ARM Serial Wire Debug host on a lite engine against an SW-DP + MEM-AP model: JTAG-to-SWD switch, DPIDR, power-up, FAULT/ABORT, WAIT retries, memory write/read through TAR/DRW; contention and edge timing checks |
-| `test_jtag.py` | JTAG host (lite engine for TCK/TDI/TDO, TMS from C between pushes) against a two-device TAP chain model: IDCODEs, IR capture, BYPASS count, user data register write/read; TMS/TDI setup and hold checks |
-| `test_quad.py` | all four engines as UARTs at 1 Mbaud at the same time |
-| `test_mixed.py` | CAN, SPI, UART and I2C at the same time, one per engine, as cooperative C tasks (`sw/include/pt.h`) |
-| `test_queue.py` | job queue: eight protocol jobs in two waves of four, each loaded into its slot by the host while the other slots run (`sw/tests/queue`, `sw/jobs/`) |
-| `lib/uart.py`, `lib/spi.py`, `lib/i2c.py`, `lib/usb.py`, `lib/eth.py`, `lib/ws2812.py`, `lib/onewire.py`, `lib/can.py`, `lib/swd.py`, `lib/jtag.py`, `lib/dmx512.py`, `lib/ps2.py`, `lib/ir_nec.py` | independent UART, SPI, I2C, USB LS, 10BASE-T, WS2812, 1-Wire, CAN, SWD, JTAG, DMX512, PS/2 and NEC infrared peer models; open-drain and USB bus models for the uio pins |
-| `lib/pins.py` | shared driver for `ui_in` (several models drive different bits) |
+| `test_*.py` | 65 cocotb test modules (117 tests total): 37 default modules (79 tests), 25 extended modules (35 tests, `EXTENDED=yes`), `test_stress4.py` (manual multi-protocol stress sweep), and `test_rmii.py` / `test_eth100_ping.py` (experimental RMII variant, `RMII=yes`). See [../docs/verification.md](../docs/verification.md) and [../docs/protocols.md](../docs/protocols.md) for the full list |
+| `lib/` | 48 helper and independent protocol peer-model modules (`host.py` for the SPI loader, `soc.py` for reset/firmware build/shared memory, `pins.py` for `ui_in`/`uo_out` helpers, `edges.py`, plus one model module per protocol family) |
+| `firmware/` | committed prebuilt `.bin` images used when no RISC-V GCC is installed (`make -C ../sw prebuilt`) |
+| `mutation.py` | mutation-check harness that injects deliberate firmware faults to verify the peer models reject them |
 | `tb.v` | testbench wrapper around the top level |

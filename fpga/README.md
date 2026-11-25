@@ -2,7 +2,8 @@
 
 Target board: ALIENTEK DFZU2EG (AMD Zynq UltraScale+ XCZU2EG-SFVC784-1); only
 the programmable logic is used. The chip RTL in `src/` is used unchanged,
-except that the IHP SRAM macro is replaced by a block RAM.
+except that the three IHP SRAM macros are replaced by one 16 KB block RAM
+(a superset of the chip's 14 KB).
 
 | File | Purpose |
 |---|---|
@@ -41,9 +42,16 @@ while the clock runs; LED2 shows HOST_IRQ. PL_RST resets the chip.
    `run_program` reads the image back before it starts the CPU.
 
 Any other program then runs the same way, with its peers on J19 (for example a
-USB-UART adapter on uo[0]/ui[4] for `uart_echo`; check each example's pin list).
+USB-UART adapter on uo[1]/ui[0] for `uart_echo`; check each example's pin list).
 
 ## Results (Vivado 2025.2, 2026-11-14)
+
+Note: the Vivado utilization/timing numbers and bridge simulation below were
+run on the 2026-11-14 four-engine / 4 KB revision (before DMA, CAN FD, I3C,
+biphase and 14 KB SRAM were added). Building or running the current RTL on the
+FPGA still needs `../src/pg_dma.v` added to `build.tcl`/`synth.tcl` and the
+shared-memory address updated from `0x0F00` to `0x3700` in
+`tools/polyglot_host.py` and `sim/test_bridge.py`.
 
 - Chip top alone, out of context (`synth.tcl`): 5,119 LUTs (10.8 %), 2,904
   flip-flops (3.1 %), 1 block RAM tile, no DSPs; setup slack +12.42 ns at
